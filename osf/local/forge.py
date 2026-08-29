@@ -28,7 +28,14 @@ class InMemoryForge:
 
     def __init__(self) -> None:
         self.prs: dict[int, PrState] = {}
+        self.repos: list[RepoRef] = []
         self._next_number = 1
+
+    async def create_repo(
+        self, repo: RepoRef, *, private: bool = True, description: str = ""
+    ) -> RepoRef:
+        self.repos.append(repo)
+        return repo
 
     async def open_pr(self, repo: RepoRef, branch: str, title: str, body: str) -> PrRef:
         ref = PrRef(repo=repo, number=self._next_number)

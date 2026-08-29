@@ -28,6 +28,7 @@ class Plan:
     objective: Objective
     work_items: list[WorkItem]
     skills: SkillRegistry
+    provision_repo: bool = False  # create the repo on the forge before the loop runs
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +64,14 @@ async def execute(
     reviewer: Reviewer,
     max_rounds: int = 3,
 ) -> ObjectiveOutcome:
-    """Drive a prepackaged plan through the reconcile loop."""
+    """Drive a prepackaged plan through the reconcile loop.
+
+    If the plan requests it, provision the repo on the forge first — the worker then scaffolds it
+    (CI/CD included) and the driver opens/merges the PR against the freshly created repo.
+    """
+    if plan.provision_repo:
+        await forge.create_repo(plan.objective.repo, description=plan.objective.goal)
+
     driver = Driver(
         runtime=runtime,
         isolation=isolation,
@@ -80,12 +88,14 @@ async def execute(
 
 NEW_REPO_SKILL = Skill(
     name="new-repo",
-    description="Scaffold a brand-new repository so it's ready to build on.",
+    description="Scaffold a brand-new repository, including CI/CD, so it's ready to build on.",
     instructions=(
         "Create a complete starter repository:\n"
         "- README.md with the project name and a one-line description\n"
         "- LICENSE (MIT unless told otherwise)\n"
         "- a language-appropriate .gitignore\n"
+        "- CI/CD as code under .github/workflows/: a `ci.yml` that lints and tests on push/PR, "
+        "and a `release.yml` that builds/publishes on version tags\n"
         "Keep it minimal and correct; do not add application code beyond a placeholder."
     ),
 )
@@ -100,16 +110,22 @@ def _build_create_repo(params: dict) -> Plan:
     objective = Objective(
         id=f"create-repo-{name}",
         repo=RepoRef(owner=owner, name=name),
-        goal=f"Create a new {language} repository '{name}': {description}".rstrip(": "),
-        acceptance_criteria=["README.md exists", "LICENSE exists", ".gitignore exists"],
+        goal=f"Create a new {language} repository '{name}' with CI/CD: {description}".rstrip(": "),
+        acceptance_criteria=[
+            "README.md exists",
+            "LICENSE exists",
+            ".gitignore exists",
+            ".github/workflows/ci.yml exists",
+        ],
     )
+    spec = f"Scaffold a new {language} repository named '{name}' with CI/CD. {description}".strip()
     work_item = WorkItem(
         id=f"{objective.id}-scaffold",
         objective_id=objective.id,
-        spec=f"Scaffold a new {language} repository named '{name}'. {description}".strip(),
+        spec=spec,
         skills=["new-repo"],
     )
-    return Plan(objective, [work_item], SkillRegistry([NEW_REPO_SKILL]))
+    return Plan(objective, [work_item], SkillRegistry([NEW_REPO_SKILL]), provision_repo=True)
 
 
 CREATE_REPO = PrepackagedRun(
