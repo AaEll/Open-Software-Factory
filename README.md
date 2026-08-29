@@ -29,3 +29,13 @@ pip install -e ".[dev]"
 ruff check .
 pytest
 ```
+
+## Eval
+
+An offline end-to-end eval drives the whole pipeline against local reference adapters
+(`osf/local/`): objective → worker agent in an isolated git workspace → PR → merge, graded on
+acceptance criteria. No API keys or network.
+
+```bash
+python -m evals.efactory_webpage   # builds a landing page for efactory.ai and grades it
+```
