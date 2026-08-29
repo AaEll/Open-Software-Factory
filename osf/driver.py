@@ -21,6 +21,7 @@ from osf.forge import Forge
 from osf.isolation import IsolationBackend
 from osf.model import Objective, WorkItem
 from osf.runtime import AgentRuntime
+from osf.skills import SkillRegistry, apply_skills
 from osf.types import PrRef, Workspace
 
 
@@ -67,6 +68,7 @@ class Driver:
         forge: Forge,
         reviewer: Reviewer,
         decompose: Callable[[Objective], list[WorkItem]] = default_decompose,
+        skills: SkillRegistry | None = None,
         max_rounds: int = 3,
     ) -> None:
         self._runtime = runtime
@@ -74,6 +76,7 @@ class Driver:
         self._forge = forge
         self._reviewer = reviewer
         self._decompose = decompose
+        self._skills = skills
         self._max_rounds = max_rounds
 
     async def run(self, objective: Objective) -> ObjectiveOutcome:
@@ -107,7 +110,10 @@ class Driver:
 
     async def _dispatch_worker(self, workspace: Workspace, item: WorkItem, feedback: str) -> None:
         session = await self._runtime.create_session(workspace, role="worker")
-        await self._runtime.prompt(session, _worker_prompt(item, feedback))
+        prompt = _worker_prompt(item, feedback)
+        if self._skills is not None and item.skills:
+            prompt = apply_skills(prompt, self._skills, item.skills)
+        await self._runtime.prompt(session, prompt)
         await self._runtime.result(session)
         await self._isolation.exec(workspace, ["git", "add", "-A"])
         # A no-op commit (nothing changed since last round) is fine; the forge state still advances.
