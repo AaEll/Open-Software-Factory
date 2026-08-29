@@ -53,3 +53,14 @@ cp .env.example .env              # then set FIREWORKS_API_KEY in .env
 # optional: OSF_MODEL=fireworks/accounts/fireworks/models/kimi-k2-instruct
 python -m evals.efactory_live
 ```
+
+## CI/CD
+
+- **CI** (`.github/workflows/ci.yml`) runs on every push/PR: lint (`ruff`), a test matrix across
+  Python 3.11–3.13, and a packaging build.
+- **CD** (`.github/workflows/release.yml`) builds the wheel/sdist and publishes a GitHub Release on
+  version tags. Cut a release by pushing a tag:
+
+  ```bash
+  git tag v0.1.0 && git push origin v0.1.0
+  ```
