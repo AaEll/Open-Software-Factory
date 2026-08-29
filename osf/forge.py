@@ -21,7 +21,11 @@ class ChecksStatus:
 
 
 class Forge(Protocol):
-    """Opens PRs, posts (review) comments, reads checks, and merges."""
+    """Creates repos, opens PRs, posts (review) comments, reads checks, and merges."""
+
+    async def create_repo(
+        self, repo: RepoRef, *, private: bool = True, description: str = ""
+    ) -> RepoRef: ...
 
     async def open_pr(self, repo: RepoRef, branch: str, title: str, body: str) -> PrRef: ...
 

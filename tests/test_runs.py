@@ -11,7 +11,7 @@ from osf.local.isolation import TempdirIsolation
 from osf.runs import all_runs, execute, get_run, register_run
 from osf.runtime import AgentResult
 
-REQUIRED = ["README.md", "LICENSE", ".gitignore"]
+REQUIRED = ["README.md", "LICENSE", ".gitignore", ".github/workflows/ci.yml"]
 
 
 def test_create_repo_is_registered_and_builds_a_plan():
@@ -20,6 +20,8 @@ def test_create_repo_is_registered_and_builds_a_plan():
 
     assert plan.objective.repo.name == "widgets"
     assert "widgets" in plan.objective.goal
+    assert plan.provision_repo is True  # the run creates the repo
+    assert ".github/workflows/ci.yml exists" in plan.objective.acceptance_criteria
     (item,) = plan.work_items
     assert item.skills == ["new-repo"]
     assert plan.skills.get("new-repo").name == "new-repo"
@@ -46,6 +48,9 @@ class _ScaffoldRuntime:
         (d / "README.md").write_text("# widgets\nA widget lib\n")
         (d / "LICENSE").write_text("MIT")
         (d / ".gitignore").write_text("__pycache__/\n")
+        workflow = d / ".github" / "workflows" / "ci.yml"
+        workflow.parent.mkdir(parents=True, exist_ok=True)
+        workflow.write_text("name: ci\non: [push, pull_request]\n")
 
     async def stream_events(self, session):
         return
@@ -89,3 +94,5 @@ def test_execute_create_repo_end_to_end():
     (item,) = outcome.items
     assert item.state == "merged"
     assert forge.prs[item.pr.number].merged
+    # The run provisioned the repo before the loop (CI/CD is scaffolded via the required files).
+    assert plan.objective.repo in forge.repos
