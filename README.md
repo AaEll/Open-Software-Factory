@@ -66,7 +66,8 @@ artifact and exits non-zero on failure.
   build, then `osf-smoke` in the container).
 - **CD** (`.github/workflows/release.yml`) on version tags: publishes the **wheel + sdist** to a
   GitHub Release and pushes the **container** to GHCR (`ghcr.io/<owner>/open-software-factory`),
-  each gated by the pass-through smoke. Cut a release:
+  each gated by the pass-through smoke. Artifact versions are derived from the git tag (`hatch-vcs`).
+  Cut a release:
 
   ```bash
   git tag v0.1.0 && git push origin v0.1.0

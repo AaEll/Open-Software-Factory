@@ -6,4 +6,9 @@ Phase 0: this package defines the core contracts (`AgentRuntime`, `IsolationBack
 `Forge`) and the event-sourced data model. No product logic yet. See docs/ARCHITECTURE.md.
 """
 
-__version__ = "0.0.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("open-software-factory")
+except PackageNotFoundError:  # not installed (e.g. running from a source tree without build)
+    __version__ = "0.0.0"
