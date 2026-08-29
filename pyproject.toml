@@ -12,6 +12,12 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
 ]
+# Real agent engines. The offline eval does not need these.
+agent = [
+    "openai>=1.40",       # Fireworks (OpenAI-compatible) — factory default
+    "anthropic>=0.40",    # optional second engine
+    "python-dotenv>=1.0",
+]
 
 [build-system]
 requires = ["hatchling"]

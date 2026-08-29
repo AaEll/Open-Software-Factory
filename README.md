@@ -39,3 +39,17 @@ acceptance criteria. No API keys or network.
 ```bash
 python -m evals.efactory_webpage   # builds a landing page for efactory.ai and grades it
 ```
+
+### Live run (real agent)
+
+The same eval, driven by a real worker agent that writes into `eval/efactory-ai/` via a sandboxed
+`write_file` tool. The engine is chosen from the model's provider (opencode-style
+`provider/model` selection, `osf.types.ModelRef`): **Fireworks** (OpenAI-compatible, default) or
+Anthropic. See `osf/engines/`.
+
+```bash
+pip install -e ".[agent]"
+cp .env.example .env              # then set FIREWORKS_API_KEY in .env
+# optional: OSF_MODEL=fireworks/accounts/fireworks/models/kimi-k2-instruct
+python -m evals.efactory_live
+```

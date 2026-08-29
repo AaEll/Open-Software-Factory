@@ -16,6 +16,30 @@ SessionId = str
 
 
 @dataclass(frozen=True, slots=True)
+class ModelRef:
+    """A provider-scoped model selection, mirroring opencode's ``Model.Ref``.
+
+    A model is always identified as ``provider_id`` + ``model_id`` (e.g. ``anthropic`` /
+    ``claude-opus-4-8``), and rendered as the ``provider/model`` string agents reference. Keeping
+    provider separate from model is what lets engines stay swappable.
+    """
+
+    provider_id: str
+    model_id: str
+
+    @classmethod
+    def parse(cls, ref: str) -> ModelRef:
+        """Parse a ``provider/model`` string. The model id may itself contain slashes."""
+        provider, _, model = ref.partition("/")
+        if not provider or not model:
+            raise ValueError(f"invalid model ref {ref!r}; expected 'provider/model'")
+        return cls(provider_id=provider, model_id=model)
+
+    def __str__(self) -> str:
+        return f"{self.provider_id}/{self.model_id}"
+
+
+@dataclass(frozen=True, slots=True)
 class RepoRef:
     """A target repository on a forge (e.g. ``owner/name`` on GitHub)."""
 
