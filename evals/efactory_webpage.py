@@ -78,6 +78,9 @@ def main() -> None:
         print(f"  [{'x' if check.passed else ' '}] {check.criterion}")
     passed = sum(c.passed for c in checks)
     print(f"{passed}/{len(checks)} criteria passed")
+    # Exit non-zero so this doubles as a predeployment smoke test (pass-through pipeline).
+    if not result.merged or passed != len(checks):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
