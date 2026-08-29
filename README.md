@@ -64,7 +64,9 @@ artifact and exits non-zero on failure.
 - **CI** (`.github/workflows/ci.yml`) on every push/PR: lint (`ruff`), test matrix (Python
   3.11–3.13), `build` (wheel+sdist, then `osf-smoke` on the installed wheel), and `image` (docker
   build, then `osf-smoke` in the container).
-- **CD** (`.github/workflows/release.yml`) publishes on version tags. Cut a release:
+- **CD** (`.github/workflows/release.yml`) on version tags: publishes the **wheel + sdist** to a
+  GitHub Release and pushes the **container** to GHCR (`ghcr.io/<owner>/open-software-factory`),
+  each gated by the pass-through smoke. Cut a release:
 
   ```bash
   git tag v0.1.0 && git push origin v0.1.0
