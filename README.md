@@ -56,11 +56,18 @@ python -m evals.efactory_live
 
 ## CI/CD
 
-- **CI** (`.github/workflows/ci.yml`) runs on every push/PR: lint (`ruff`), a test matrix across
-  Python 3.11–3.13, and a packaging build.
-- **CD** (`.github/workflows/release.yml`) builds the wheel/sdist and publishes a GitHub Release on
-  version tags. Cut a release by pushing a tag:
+Three build artifacts: **wheel + sdist** for local `pip install`, and a **container** for cloud
+deployment. Each is gated by a **pass-through predeployment smoke test** — `osf-smoke` runs the whole
+`objective → worker → PR → merge` pipeline (offline reference adapters) against the *installed*
+artifact and exits non-zero on failure.
+
+- **CI** (`.github/workflows/ci.yml`) on every push/PR: lint (`ruff`), test matrix (Python
+  3.11–3.13), `build` (wheel+sdist, then `osf-smoke` on the installed wheel), and `image` (docker
+  build, then `osf-smoke` in the container).
+- **CD** (`.github/workflows/release.yml`) publishes on version tags. Cut a release:
 
   ```bash
   git tag v0.1.0 && git push origin v0.1.0
   ```
+
+Run the smoke locally with `osf-smoke` (after `pip install -e .`).

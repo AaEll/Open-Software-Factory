@@ -38,6 +38,8 @@ jobs:
       # Offline suite only; the live Fireworks test skips without OSF_RUN_LIVE + a key.
       - run: pytest -q
 
+  # Build the local artifacts (wheel + sdist) and run the pass-through predeployment smoke
+  # against the *installed* wheel — so we test what users actually install.
   build:
     runs-on: ubuntu-latest
     steps:
@@ -47,8 +49,21 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install build
-      - run: python -m build
+      - run: python -m build # produces dist/*.whl and dist/*.tar.gz
+      - name: predeployment smoke test (installed wheel)
+        run: |
+          pip install dist/*.whl
+          osf-smoke
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/*
+
+  # Build the cloud deployment artifact (container) and run the same pass-through smoke in it.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t osf:ci .
+      - name: predeployment smoke test (container)
+        run: docker run --rm osf:ci
