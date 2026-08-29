@@ -39,6 +39,7 @@ class WorkItem:
     objective_id: ObjectiveId
     spec: str
     depends_on: list[WorkItemId] = field(default_factory=list)
+    skills: list[str] = field(default_factory=list)  # skill names to load for this item
     state: WorkItemState = "pending"
 
 
