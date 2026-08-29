@@ -30,6 +30,12 @@ ruff check .
 pytest
 ```
 
+## Run the agent loop
+
+Start the driver control loop (`decompose → dispatch worker → open PR → review → merge`) from a few
+lines of Python — offline (no keys), with a real engine (Fireworks), or against real GitHub. Fastest
+check: `osf-smoke`. Full guide: [`docs/running-the-loop.md`](docs/running-the-loop.md).
+
 ## Eval
 
 An offline end-to-end eval drives the whole pipeline against local reference adapters
