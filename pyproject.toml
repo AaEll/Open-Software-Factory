@@ -1,11 +1,11 @@
 [project]
 name = "open-software-factory"
-version = "0.0.0"
 description = "Autonomous multi-agent software factory: objectives in, merged PRs out."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 dependencies = []
+dynamic = ["version"] # derived from the git tag by hatch-vcs
 
 [project.scripts]
 osf-smoke = "osf.smoke:main"
@@ -23,8 +23,15 @@ agent = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+# No .git in the build context (Docker) / no tags yet → fall back instead of erroring.
+[tool.hatch.version.raw-options]
+fallback_version = "0.0.0"
 
 [tool.hatch.build.targets.wheel]
 packages = ["osf"]
