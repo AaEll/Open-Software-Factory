@@ -1,0 +1,114 @@
+"""Fireworks-backed `AgentRuntime` (OpenAI-compatible API).
+
+Fireworks serves open models behind an OpenAI-compatible endpoint, so this adapter drives it with
+the `openai` SDK pointed at Fireworks' base URL and a standard function-calling loop. Model
+selection uses opencode's `provider/model` `ModelRef` (`provider_id="fireworks"`).
+
+Setup: `pip install -e ".[agent]"` and set `FIREWORKS_API_KEY` (e.g. in `.env`).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import AsyncIterator
+
+from osf.engines._tools import (
+    WORKER_SYSTEM,
+    WRITE_TOOL_DESCRIPTION,
+    WRITE_TOOL_NAME,
+    WRITE_TOOL_PARAMETERS,
+    apply_write,
+)
+from osf.runtime import AgentEvent, AgentResult
+from osf.types import ModelRef, SessionId, Workspace
+
+BASE_URL = "https://api.fireworks.ai/inference/v1"
+# Overridable via OSF_MODEL; confirm the exact id against your Fireworks account.
+DEFAULT_MODEL = ModelRef(
+    provider_id="fireworks", model_id="accounts/fireworks/models/kimi-k2p7-code"
+)
+_MAX_STEPS = 12
+
+_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": WRITE_TOOL_NAME,
+            "description": WRITE_TOOL_DESCRIPTION,
+            "parameters": WRITE_TOOL_PARAMETERS,
+        },
+    }
+]
+
+
+class FireworksRuntime:
+    """Runs a single worker turn against a Fireworks-hosted model, writing into the workspace."""
+
+    def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
+        if model.provider_id != "fireworks":
+            raise ValueError(f"FireworksRuntime only serves the 'fireworks' provider, got {model}")
+        self._model = model
+        self._sessions: dict[SessionId, Workspace] = {}
+        self._results: dict[SessionId, AgentResult] = {}
+        self._counter = 0
+
+    async def create_session(self, workspace: Workspace, role: str) -> SessionId:
+        self._counter += 1
+        session = f"fireworks-{self._counter}"
+        self._sessions[session] = workspace
+        return session
+
+    async def prompt(self, session: SessionId, text: str) -> None:
+        workspace = self._sessions[session]
+        self._results[session] = await asyncio.to_thread(self._run_loop, workspace, text)
+
+    async def stream_events(self, session: SessionId) -> AsyncIterator[AgentEvent]:
+        for event in self._results[session].transcript:
+            yield event
+
+    async def interrupt(self, session: SessionId) -> None:
+        return None
+
+    async def result(self, session: SessionId) -> AgentResult:
+        return self._results[session]
+
+    def _run_loop(self, workspace: Workspace, prompt: str) -> AgentResult:
+        import os
+
+        from openai import OpenAI  # lazy: keeps the dependency optional
+
+        api_key = os.environ.get("FIREWORKS_API_KEY") or os.environ.get("FIREWORKS")
+        if not api_key:
+            raise RuntimeError("set FIREWORKS_API_KEY (or FIREWORKS) in the environment or .env")
+        client = OpenAI(base_url=BASE_URL, api_key=api_key)
+        messages: list[dict] = [
+            {"role": "system", "content": WORKER_SYSTEM},
+            {"role": "user", "content": prompt},
+        ]
+        transcript: list[AgentEvent] = []
+
+        for _ in range(_MAX_STEPS):
+            response = client.chat.completions.create(
+                model=self._model.model_id,
+                messages=messages,
+                tools=_TOOLS,
+                max_tokens=16000,
+            )
+            message = response.choices[0].message
+            messages.append(message.model_dump(exclude_none=True))
+
+            if not message.tool_calls:
+                return AgentResult(outcome="completed", transcript=transcript, cost_usd=0.0)
+
+            for call in message.tool_calls:
+                args = json.loads(call.function.arguments)
+                outcome, is_error = apply_write(workspace, args["path"], args["content"])
+                transcript.append(AgentEvent(kind="file.write", data={"path": args["path"]}))
+                messages.append(
+                    {"role": "tool", "tool_call_id": call.id, "content": outcome}
+                )
+                if is_error:
+                    transcript.append(AgentEvent(kind="error", data={"message": outcome}))
+
+        return AgentResult(outcome="failed", transcript=transcript, cost_usd=0.0)

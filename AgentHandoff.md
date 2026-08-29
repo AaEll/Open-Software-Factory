@@ -17,12 +17,20 @@ Notes for any agent starting work in this repo. Read `docs/ARCHITECTURE.md` for 
 
 ## Status
 
-Phase 0 (foundations & contracts). `docs/ARCHITECTURE.md` written; Python skeleton scaffolded
-(`pyproject.toml`, `osf/` package, tests, CI) — contracts are protocol stubs with no product logic
-yet. Core seams: `osf/runtime.py` (`AgentRuntime`), `osf/isolation.py` (`IsolationBackend`),
-`osf/forge.py` (`Forge`), `osf/model.py` (data model). Isolation is tiered (worktree local /
-container cloud); first agent engine adapter is opencode's headless server; language is Python.
-Dev loop: `pip install -e ".[dev]"` then `ruff check .` and `pytest`.
+Phase 0 (foundations & contracts) + first live vertical slice. `docs/ARCHITECTURE.md` written;
+Python skeleton scaffolded (`pyproject.toml`, `osf/` package, tests, CI). Core seams:
+`osf/runtime.py` (`AgentRuntime`), `osf/isolation.py` (`IsolationBackend`), `osf/forge.py`
+(`Forge`), `osf/model.py` (data model). Model selection follows opencode: `osf.types.ModelRef`
+(`provider/model`); the provider picks the engine via `osf/engines/resolve_runtime`.
+
+Engines (`osf/engines/`): **Fireworks is the default** (OpenAI-compatible, `osf/engines/fireworks.py`),
+Anthropic/Claude is a second adapter. Live eval `python -m evals.efactory_live` runs a real worker
+into `eval/<repo-name>/` and grades it — verified passing 4/4 on
+`fireworks/accounts/fireworks/models/kimi-k2p7-code`. Secrets in `.env` (gitignored):
+`FIREWORKS_API_KEY` (or `FIREWORKS`); override model with `OSF_MODEL`.
+
+Isolation is tiered (worktree local / container cloud). Dev loop: `pip install -e ".[dev]"` then
+`ruff check .` and `pytest`; real engines need `pip install -e ".[agent]"`.
 
 Open questions before Phase 1: final language call, forge auth (GitHub App vs PAT), definition-of-done
 mechanism, cost metering granularity.
