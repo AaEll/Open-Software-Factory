@@ -79,7 +79,12 @@ After the run you see what changed and decide:
 ```
 
 Answering `n` restores every file the run touched — additions deleted, edits and deletions put
-back — from a snapshot taken before it started.
+back — from a snapshot taken before it started. The snapshot is of your *working tree*, not of the
+last commit, so uncommitted work you had in progress comes back exactly as it was.
+
+One limitation worth knowing: **gitignored paths are outside the safety net.** Snapshots use
+`git add -A`, which skips ignored files, so anything written under an ignored path (`secrets/`,
+`node_modules/`, a local `.env`) is neither listed as changed nor undone by a revert.
 
 **`sf` never commits for you, and never stages anything.** Snapshots are captured through a private
 git index under `.git/`, so your staging area is exactly as you left it. The change lands in your

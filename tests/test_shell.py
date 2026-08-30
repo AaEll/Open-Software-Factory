@@ -5,6 +5,7 @@ it by hand — so these cover the prompts as well as the commands. All offline: 
 """
 
 import io
+import os
 import sys
 
 import pytest
@@ -19,7 +20,7 @@ from osf.config import (
 from osf.planner import ProposedPlan, Step
 from osf.prompts import Cancelled, Choice, Style, confirm, select, text
 from osf.runs import get_run
-from osf.shell import Session, Shell
+from osf.shell import Session, Shell, default_model, default_session
 from osf.types import ModelRef, RepoRef
 
 
@@ -49,17 +50,9 @@ def run_shell(script: str, capsys, session: Session | None = None) -> str:
 # --- commands ---------------------------------------------------------------------------------
 
 
-def test_help_lists_every_command(capsys):
-    out = run_shell("/help\n/quit\n", capsys)
-    for command in ("/new-repo", "/runs", "/repo", "/model", "/forge", "/rounds", "/smoke"):
-        assert command in out
-
-
-def test_status_shows_defaults(capsys):
-    out = run_shell("/status\n/quit\n", capsys, Session())
-    assert "repo:   unset" in out
-    assert "offline (scripted worker)" in out
-    assert "forge:  local" in out  # your own repository, the opencode model
+def test_a_fresh_session_targets_the_users_own_repository(capsys):
+    """The default is the riskiest setting there is — it decides whose files get edited."""
+    assert "forge:  local" in run_shell("/status\n/quit\n", capsys, Session())
 
 
 def test_repo_model_forge_rounds_are_remembered(capsys):
@@ -95,24 +88,25 @@ def test_unknown_command(capsys):
     assert "unknown command /bogus" in run_shell("/bogus\n/quit\n", capsys)
 
 
-def test_aliases_quit(capsys):
-    assert run_shell("/exit\n", capsys) is not None
+@pytest.mark.parametrize("command", ["/quit", "/exit", "/q"])
+def test_quitting_stops_reading_input(command, capsys):
+    # Anything after the quit must not run — an alias that only *looked* like it quit would
+    # keep executing the rest of the script.
+    out = run_shell(f"{command}\n/bogus\n", capsys)
+    assert "unknown command" not in out
 
 
-def test_eof_leaves_the_shell(capsys):
-    assert "Open Software Factory" in run_shell("", capsys)
-
-
-def test_runs_lists_the_builtin(capsys):
-    assert "create-repo" in run_shell("/runs\n/quit\n", capsys)
+def test_end_of_input_exits_cleanly():
+    """Closed stdin must return cleanly, not hang or raise."""
+    sys.stdin = io.StringIO("")
+    try:
+        assert Shell(Session(forge="memory")).run() == 0
+    finally:
+        sys.stdin = sys.__stdin__
 
 
 def test_unknown_run_is_reported(capsys):
     assert "unknown run" in run_shell("/run nope\n/quit\n", capsys)
-
-
-def test_smoke_command(capsys):
-    assert "smoke: ok" in run_shell("/smoke\n/quit\n", capsys)
 
 
 def test_a_failing_command_does_not_kill_the_shell(capsys):
@@ -310,6 +304,47 @@ def test_cancelling_a_wizard_returns_to_the_prompt(capsys):
     assert "cancelled" in out
 
 
+# --- picking an engine at startup ----------------------------------------------------------
+
+
+def test_osf_model_wins_over_everything(monkeypatch):
+    monkeypatch.setenv("OSF_MODEL", "anthropic/claude-opus-4-8")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw-key")
+    assert default_model() == ModelRef("anthropic", "claude-opus-4-8")
+
+
+def test_a_fireworks_key_alone_selects_an_engine(monkeypatch):
+    """A user with a key must not land on the scripted planner by accident."""
+    pytest.importorskip("openai")  # without the agent extra there is no engine to select
+    monkeypatch.delenv("OSF_MODEL", raising=False)
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw-key")
+    model = default_model()
+    assert model is not None and model.provider_id == "fireworks"
+
+
+def test_no_key_means_no_engine(monkeypatch):
+    monkeypatch.delenv("OSF_MODEL", raising=False)
+    for var in ("FIREWORKS_API_KEY", "FIREWORKS"):
+        monkeypatch.delenv(var, raising=False)
+    assert default_model() is None
+
+
+def test_dotenv_is_read_from_the_directory_you_launched_in(monkeypatch, tmp_path):
+    """`load_dotenv()` searches from the calling *file*, so an installed `sf` found nothing.
+
+    The fix is `find_dotenv(usecwd=True)`; this pins it, because the failure is invisible in a
+    development checkout — there the package sits next to the repo's own .env and appears to work.
+    """
+    pytest.importorskip("dotenv")
+    (tmp_path / ".env").write_text("FIREWORKS_API_KEY=from-the-cwd\n", encoding="utf-8")
+    for var in ("OSF_MODEL", "FIREWORKS_API_KEY", "FIREWORKS"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    default_session()
+    assert os.environ["FIREWORKS_API_KEY"] == "from-the-cwd"
+
+
 # --- prompt widgets -----------------------------------------------------------------------------
 
 
@@ -321,25 +356,13 @@ def _answers(monkeypatch, *lines):
 OPTIONS = (Choice("ci-cd", "Template with CI/CD"), Choice("blank", "Blank repository"))
 
 
-def test_select_accepts_a_number(monkeypatch, capsys):
-    _answers(monkeypatch, "2")
-    assert select("Starting point", OPTIONS) == "blank"
-
-
-def test_select_accepts_the_value(monkeypatch, capsys):
-    _answers(monkeypatch, "blank")
-    assert select("Starting point", OPTIONS) == "blank"
-
-
-def test_select_empty_takes_the_default(monkeypatch, capsys):
-    _answers(monkeypatch, "")
-    assert select("Starting point", OPTIONS, default="blank") == "blank"
-
-
-def test_select_reasks_on_a_bad_answer(monkeypatch, capsys):
-    _answers(monkeypatch, "9", "1")
-    assert select("Starting point", OPTIONS) == "ci-cd"
-    assert "pick 1-2" in capsys.readouterr().out
+@pytest.mark.parametrize(
+    ("typed", "chosen"),
+    [(["2"], "blank"), (["blank"], "blank"), ([""], "ci-cd"), (["9", "1"], "ci-cd")],
+)
+def test_select_accepts_a_number_a_name_or_the_default(typed, chosen, monkeypatch, capsys):
+    _answers(monkeypatch, *typed)
+    assert select("Starting point", OPTIONS) == chosen
 
 
 def test_text_default_and_required(monkeypatch, capsys):
@@ -374,14 +397,6 @@ def test_cancel_is_raised_on_eof(monkeypatch):
 
 
 # --- run schema ----------------------------------------------------------------------------------
-
-
-def test_create_repo_declares_its_questions():
-    run = get_run("create-repo")
-    assert [p.name for p in run.params] == ["name", "description", "template", "language"]
-    assert run.params[0].required  # name has no default
-    assert not run.params[1].required  # description is optional
-    assert [c.value for c in run.params[2].choices] == ["ci-cd", "blank"]
 
 
 def test_unknown_template_is_rejected():

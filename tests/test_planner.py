@@ -13,7 +13,6 @@ from osf.planner import (
     parse_plan,
     parse_questions,
     propose_with_retry,
-    render_json,
 )
 from osf.review import PlanReviewer
 from osf.types import RepoRef, Workspace
@@ -109,11 +108,6 @@ def test_parse_plan_falls_back_to_the_request_for_a_missing_goal():
 def test_parse_plan_rejects_unusable_replies(reply):
     with pytest.raises(ValueError):
         parse_plan(reply, fallback_goal="x")
-
-
-def test_render_json_round_trips():
-    plan = ProposedPlan("g", [Step("a", ["index.html"])])
-    assert parse_plan(render_json(plan), fallback_goal="x") == plan
 
 
 # --- clarifying questions ---------------------------------------------------------------------

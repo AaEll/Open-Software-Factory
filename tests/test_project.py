@@ -118,6 +118,55 @@ def test_restore_undoes_additions_modifications_and_deletions(isolation, workspa
     assert isolation.changed_since(workspace, before) == []
 
 
+def test_restore_returns_uncommitted_work_not_the_last_commit(isolation, workspace, repo: Path):
+    """The snapshot is the *working tree*, so revert must not reset to HEAD.
+
+    A naive restore (`git checkout HEAD -- .`) passes every other test here and silently destroys
+    whatever the user had not committed yet — the worst failure this module can have.
+    """
+    (repo / "README.md").write_text("# edited but not committed\n", encoding="utf-8")
+
+    before = isolation.snapshot(workspace)
+    (repo / "README.md").write_text("# the agent overwrote it\n", encoding="utf-8")
+    isolation.restore(workspace, before)
+
+    assert (repo / "README.md").read_text(encoding="utf-8") == "# edited but not committed\n"
+    assert "# demo" not in (repo / "README.md").read_text(encoding="utf-8")  # not the commit
+
+
+def test_gitignored_files_are_invisible_to_snapshots(isolation, workspace, repo: Path):
+    """Pins a real limitation: ignored paths are outside the safety net entirely.
+
+    `git add -A` skips ignored files, so anything an agent writes under an ignored path is not
+    reported as changed and survives a revert. Documented in cli-howto.md; asserted here so the
+    behaviour can't drift unnoticed in either direction.
+    """
+    (repo / ".gitignore").write_text("secrets/\n", encoding="utf-8")
+    (repo / "secrets").mkdir()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "ignore secrets")
+
+    before = isolation.snapshot(workspace)
+    (repo / "secrets" / "leaked.txt").write_text("written by the agent", encoding="utf-8")
+    (repo / "visible.txt").write_text("also written by the agent", encoding="utf-8")
+
+    assert isolation.changed_since(workspace, before) == ["visible.txt"]
+    isolation.restore(workspace, before)
+    assert not (repo / "visible.txt").exists()
+    assert (repo / "secrets" / "leaked.txt").is_file()  # untouched by revert
+
+
+def test_a_second_run_is_measured_from_the_first(capsys, repo: Path, monkeypatch):
+    """Each run reports only its own changes, not everything since the session began."""
+    session = Session(project=repo, forge="local")
+    run_shell("Create a landing page for demo.osf\n\ny\n/quit\n", capsys, session)
+    assert (repo / "index.html").is_file()
+
+    out = run_shell("Create a landing page for demo.osf\n\ny\n/quit\n", capsys, session)
+    # The scripted worker rewrites the same file with the same content, so nothing differs.
+    assert "no files changed" in out
+
+
 def test_cleanup_never_deletes_the_users_repository(isolation, workspace, repo: Path):
     asyncio.run(isolation.cleanup(workspace))
     assert (repo / "README.md").is_file()

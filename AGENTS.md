@@ -40,6 +40,14 @@ needs no key and costs nothing. Re-record deliberately with `python -m evals.rec
 The offline `osf/local/` stand-ins remain the cheapest smoke path; the fixtures cover the code
 that actually talks to a model, which the stand-ins never exercise.
 
+## What a test is for
+
+A test earns its place by failing when a real promise breaks. Prefer a handful that guard
+behaviour users depend on — `sf` never stages or commits for you, revert restores uncommitted work,
+a rejected answer doesn't discard the request — over many that restate the implementation (command
+lists, default values, parameter names). If you cannot name the regression a test catches, delete
+it. When adding one for a bug, break the fix and watch the test fail before committing.
+
 ## Secrets
 
 Keys live in `.env` (gitignored) — `FIREWORKS_API_KEY` (or `FIREWORKS`). Never commit secrets or the
