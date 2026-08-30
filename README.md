@@ -32,25 +32,26 @@ pytest
 
 ## Run the agent loop
 
-`sf` opens a dialog with the driver. Type a goal in plain language and it becomes an objective the
-factory reconciles (`decompose → dispatch worker → open PR → review → merge`); use `/commands` for
-the structured workflows:
+`sf` opens a dialog with the driver. Say what you want; it proposes a plan, takes feedback until
+you accept, then reconciles it (`decompose → dispatch worker → open PR → review → merge`):
 
 ```console
 $ sf
 Open Software Factory
-  offline (scripted worker) · forge memory · /help for commands
 
-› /new-repo
-? Repository name › widgets
-? Starting point
-  › 1. Template with CI/CD  README, LICENSE, .gitignore, workflows
-    2. Blank repository  README and .gitignore only
+› Create a landing page for my dog Pobrecita
+? Repository name › pobrecita
+  planning…
+  plan  Build a charming single-page landing site for Pobrecita the dog.
+    1. Create a responsive landing page with a hero, a short bio and a photo
+       gallery area.  → index.html, styles.css
+? Run this? (Enter to accept, or say what to change) › also add a gallery page
 ```
 
-`/model provider/model` picks a real engine, `/forge github` works against real repositories, and
-`/status` shows the session. Step-by-step: [`docs/cli-howto.md`](docs/cli-howto.md). Driving the
-loop from Python instead: [`docs/running-the-loop.md`](docs/running-the-loop.md).
+The files on each step are the definition of done — proposed by the driver, not demanded of you.
+`/commands` reach the structured workflows (`/new-repo`), pick an engine (`/model`), and choose a
+forge (`/forge github`). Step-by-step: [`docs/cli-howto.md`](docs/cli-howto.md). Driving the loop
+from Python instead: [`docs/running-the-loop.md`](docs/running-the-loop.md).
 
 ## Eval
 

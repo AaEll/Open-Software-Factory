@@ -9,7 +9,14 @@ import sys
 
 import pytest
 
-from osf.config import default_owner, parse_repo, valid_repo_name
+from osf.config import (
+    LOCAL_OWNER,
+    default_owner,
+    detected_owner,
+    parse_repo,
+    valid_repo_name,
+)
+from osf.planner import ProposedPlan, Step
 from osf.prompts import Cancelled, Choice, Style, confirm, select, text
 from osf.runs import get_run
 from osf.shell import Session, Shell
@@ -120,28 +127,25 @@ def test_repo_command_accepts_a_bare_name(capsys):
 
 
 def test_objective_merges_offline(capsys):
-    out = run_shell(
-        "/repo me/site\nCreate a landing page for demo.osf\nindex.html exists\n/quit\n", capsys
-    )
+    out = run_shell("/repo me/site\nCreate a landing page for demo.osf\n\n/quit\n", capsys)
     assert "me-site: done" in out
     assert "merged" in out
 
 
-def test_objective_escalates_when_a_criterion_is_unmet(capsys):
+def test_objective_escalates_when_a_step_gate_is_unmet(capsys, monkeypatch):
     # The scripted worker only ever writes index.html, so this gate can never be satisfied.
-    out = run_shell(
-        "/repo me/site\n/rounds 1\nBuild the app\napp/main.py exists\n/quit\n", capsys
-    )
+    _plan(monkeypatch, ProposedPlan("Build the app", [Step("Build it", ["app/main.py"])]))
+    out = run_shell("/repo me/site\n/rounds 1\nBuild the app\n\n/quit\n", capsys)
     assert "escalated" in out
     assert "failed" in out
 
 
-def test_objective_asks_for_name_and_owner_when_the_repo_is_unset(capsys):
+def test_objective_asks_only_for_a_name_and_detects_the_owner(capsys):
     session = Session()
-    out = run_shell("Landing page for demo.osf\nsite\n\n\n/quit\n", capsys, session)
+    out = run_shell("Landing page for demo.osf\nsite\n\n/quit\n", capsys, session)
     assert "Repository name" in out
-    assert "Owner (your GitHub user or org)" in out
-    assert session.repo == RepoRef("me", "site")  # owner defaulted, then remembered
+    assert "Owner" not in out  # never asked — OSF_OWNER/gh/local decides it
+    assert session.repo == RepoRef("me", "site")
     assert "done" in out
 
 
@@ -155,12 +159,73 @@ def test_a_rejected_answer_is_re_asked_without_losing_the_objective(capsys):
     # The reported bug: a bad repo answer used to abort the turn and drop the objective.
     session = Session()
     out = run_shell(
-        "Make a website for my dog\naaron/\nmy site!\npobrecita\n\n\n/quit\n", capsys, session
+        "Make a website for my dog\nmy site!\npobrecita\n\n/quit\n", capsys, session
     )
-    assert "isn't an owner/name pair" in out
     assert "isn't a valid repository name" in out
     assert session.repo == RepoRef("me", "pobrecita")
     assert "done" in out  # the objective survived and still ran
+
+
+# --- plan negotiation ---------------------------------------------------------------------------
+
+
+def _plan(monkeypatch, *plans):
+    """Pin the session's planner to a scripted sequence of proposals."""
+    remaining = list(plans)
+
+    class _Scripted:
+        def propose(self, request, exchanges=()):
+            return remaining.pop(0) if remaining else remaining_last
+
+    remaining_last = plans[-1]
+    monkeypatch.setattr(Session, "planner", lambda _self: _Scripted())
+
+
+def test_the_plan_is_shown_before_anything_runs(capsys, monkeypatch):
+    _plan(monkeypatch, ProposedPlan("Build a dog site", [Step("Write index.html", ["index.html"])]))
+    out = run_shell("/repo me/site\nsite for my dog\n\n/quit\n", capsys)
+    assert "planning…" in out
+    assert "plan  Build a dog site" in out
+    assert "1. Write index.html" in out
+    assert "→ index.html" in out
+    assert "me-site: done" in out
+
+
+def test_feedback_revises_the_plan_before_running(capsys, monkeypatch):
+    first = ProposedPlan("A landing page", [Step("Write index.html", ["index.html"])])
+    second = ProposedPlan(
+        "A landing page and a gallery", [Step("Write index.html", ["index.html"])]
+    )
+    _plan(monkeypatch, first, second)
+    out = run_shell("/repo me/site\nsite for my dog\nadd a gallery\n\n/quit\n", capsys)
+    assert out.count("planning…") == 2
+    assert "A landing page and a gallery" in out
+    assert "me-site: done" in out
+
+
+def test_declining_the_plan_runs_nothing(capsys, monkeypatch):
+    _plan(monkeypatch, ProposedPlan("A landing page", [Step("Write index.html")]))
+    out = run_shell("/repo me/site\nsite for my dog\nno\n/quit\n", capsys)
+    assert "not run" in out
+    assert "done" not in out
+
+
+def test_a_planner_failure_falls_back_to_the_request(capsys, monkeypatch):
+    class _Broken:
+        def propose(self, request, exchanges=()):
+            raise RuntimeError("no API key")
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Broken())
+    out = run_shell("/repo me/site\nCreate a landing page for demo.osf\n\n/quit\n", capsys)
+    assert "planner unavailable" in out
+    assert "falling back to the request as written" in out
+    assert "me-site: done" in out  # still ran, ungated
+
+
+def test_a_plan_with_no_gate_says_so(capsys, monkeypatch):
+    _plan(monkeypatch, ProposedPlan("Whatever you like", [Step("Do it")]))
+    out = run_shell("/repo me/site\nsomething vague\n\n/quit\n", capsys)
+    assert "no file gate" in out
 
 
 # --- the structured run wizard ------------------------------------------------------------------
@@ -263,13 +328,7 @@ def test_cancel_is_raised_on_eof(monkeypatch):
 
 def test_create_repo_declares_its_questions():
     run = get_run("create-repo")
-    assert [p.name for p in run.params] == [
-        "name",
-        "description",
-        "template",
-        "language",
-        "owner",
-    ]
+    assert [p.name for p in run.params] == ["name", "description", "template", "language"]
     assert run.params[0].required  # name has no default
     assert not run.params[1].required  # description is optional
     assert [c.value for c in run.params[2].choices] == ["ci-cd", "blank"]
@@ -308,13 +367,27 @@ def test_default_owner_prefers_the_environment(monkeypatch):
     assert default_owner() == "widgets-inc"
 
 
+def test_owner_falls_back_to_the_gh_cli_then_to_local(monkeypatch, tmp_path):
+    for var in ("OSF_OWNER", "GITHUB_OWNER", "GH_OWNER", "GITHUB_USER"):
+        monkeypatch.delenv(var, raising=False)
+
+    hosts = tmp_path / "hosts.yml"
+    hosts.write_text("github.com:\n    user: AaEll\n    oauth_token: x\n", encoding="utf-8")
+    monkeypatch.setattr("osf.config.GH_HOSTS", hosts)
+    assert detected_owner() == "AaEll"
+
+    monkeypatch.setattr("osf.config.GH_HOSTS", tmp_path / "missing.yml")
+    assert detected_owner() is None
+    assert default_owner() == LOCAL_OWNER
+
+
 def test_text_re_asks_on_a_rejected_answer(monkeypatch, capsys):
     _answers(monkeypatch, "not a repo!", "widgets")
     assert text("Repository name", validate=valid_repo_name) == "widgets"
     assert "isn't a valid repository name" in capsys.readouterr().out
 
 
-def test_create_repo_owner_default_comes_from_the_environment(monkeypatch):
+def test_create_repo_uses_the_detected_owner_without_asking(monkeypatch):
     monkeypatch.setenv("OSF_OWNER", "acme")
-    owner = next(p for p in get_run("create-repo").params if p.name == "owner")
-    assert owner.resolve_default() == "acme"
+    plan = get_run("create-repo").build({"name": "widgets"})
+    assert plan.objective.repo == RepoRef("acme", "widgets")

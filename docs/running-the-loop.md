@@ -22,10 +22,17 @@ How to start OSF's driver control loop — the autonomous
 $ sf
 › /repo me/site
 › Create a landing page for demo.osf
-? Acceptance criteria naming files, comma-separated › index.html exists
+  planning…
+  plan  Build a landing page for demo.osf
+    1. Create index.html with a hero section and a short blurb.  → index.html
+? Run this? (Enter to accept, or say what to change) ›
   me-site: done
   me-site-1: merged (PR#1, rounds=1)
 ```
+
+The driver proposes the plan and the files that define "done"; you accept it or say what to change.
+`osf.planner` holds that seam — `StaticPlanner` offline, `osf.engines.resolve_planner` for a real
+model.
 
 | Command | Sets |
 |---|---|
@@ -37,7 +44,8 @@ $ sf
 
 The reviewer is [`AcceptanceReviewer`](../osf/review.py): it approves once every file named in the
 objective's acceptance criteria exists in the workspace. Criteria that name no file are
-informational and never block a merge.
+informational and never block a merge. `PlanReviewer` wraps it to judge each WorkItem against its
+own step's files.
 
 Task-first walkthrough: [`cli-howto.md`](cli-howto.md). The rest of this page is the Python API the
 shell is built on — use it when you need something the shell doesn't offer, or automation without a

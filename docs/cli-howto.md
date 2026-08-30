@@ -44,36 +44,61 @@ offline and reports `smoke: ok`.
 
 ## 3. Your first objective
 
-Anything that isn't a `/command` becomes an objective. The shell asks for the target repository the
-first time and remembers it:
+Anything that isn't a `/command` is a request. The driver plans it, shows you the plan, and does
+nothing until you accept:
 
 ```console
-› Create a landing page for demo.osf
+› Create a landing page for my dog Pobrecita
 ? Repository name › pobrecita
-? Owner (your GitHub user or org) (aelliot) ›
-  repo: aelliot/pobrecita
-? Acceptance criteria naming files, comma-separated › index.html exists
-  aelliot-pobrecita: done
-  aelliot-pobrecita-1: merged (PR#1, rounds=1)
+  repo: AaEll/pobrecita
+  planning…
+  plan  Build a charming single-page landing site for Pobrecita the dog.
+    1. Create a responsive landing page with a hero section, a short bio and a photo gallery
+       area, using HTML and CSS.  → index.html, styles.css
+? Run this? (Enter to accept, or say what to change) ›
+  AaEll-pobrecita: done
+  AaEll-pobrecita-1: merged (PR#1, rounds=1)
 ```
 
-The owner defaults to your account — `OSF_OWNER`, `GITHUB_OWNER`, `GH_OWNER`, or `GITHUB_USER` if
-one is set, otherwise your local username — so Enter is usually the right answer. If you prefer to
-type `owner/name` in one go, the name question takes that too.
+**You never have to write a merge gate.** The `→ files` on each step *are* the definition of done:
+the PR for that step cannot merge until those files exist. The driver proposes them from your
+request; you just say whether the plan is right.
+
+**Feedback is plain language.** Anything that isn't Enter or `no` is treated as a change request,
+and the driver re-plans with it:
+
+```console
+? Run this? (Enter to accept, or say what to change) › also add a photo gallery page
+  planning…
+  plan  Build a landing page and a separate photo gallery page for Pobrecita the dog.
+    1. Create a responsive landing page (index.html) with a hero section, bio and a link to the
+       gallery; style it with styles.css.  → index.html, styles.css
+    2. Create a responsive photo gallery page with a grid of photos and navigation back to the
+       landing page.  → gallery.html, gallery.css
+? Run this? (Enter to accept, or say what to change) › y
+```
+
+Enter, `y`, `ok`, `run` accept; `n`, `no`, `cancel` abandon the request; anything else is feedback.
+
+Each step is built by its own agent in its own fresh workspace and reviewed only against its own
+files — which is why steps must stand alone rather than build on each other.
+
+### About the repository name
+
+Only the name is asked. The owner is detected — `OSF_OWNER`, `GITHUB_OWNER`, `GH_OWNER` or
+`GITHUB_USER` if set, otherwise whoever `gh auth login` signed in as (read from
+`~/.config/gh/hosts.yml`, never over the network), and `local` if nothing is signed in. Work happens
+in a local `git init` workspace regardless; the owner only matters once you point the shell at a
+forge. Typing `owner/name` at the name question still works if you want to be explicit.
 
 Answers are checked as you give them: an unusable name is explained and asked again, in place. A
-typo never costs you the objective you just typed.
+typo never costs you the request you just typed.
 
-The objective became one WorkItem, a worker ran in an isolated git workspace, the forge opened
-PR #1, the reviewer checked that `index.html` existed, and it merged.
+### Offline versus a real engine
 
-**Acceptance criteria are the merge gate.** Each one that names a file must exist in the workspace
-before the PR merges; criteria naming no file (`the page looks professional`) are recorded but never
-block. Leave the question blank to gate on nothing. See [`osf/review.py`](../osf/review.py).
-
-Offline, the worker is `StaticSiteRuntime`, a scripted stand-in that only ever writes `index.html`.
-Ask it for anything else and the objective escalates — that's the stub worker, not the loop failing.
-Give it a real engine:
+With no engine set, the planner takes your request at face value — one step, no file gate — and the
+scripted worker only ever writes `index.html`. That's enough to watch the loop work, not to build
+anything. Point it at a real model to get real plans:
 
 ```console
 › /model fireworks/accounts/fireworks/models/kimi-k2p7-code
@@ -82,8 +107,9 @@ Give it a real engine:
 
 Keys are read from the environment or a `.env` in the directory you launched `sf` from
 (`cp .env.example .env`, then set `FIREWORKS_API_KEY`; `FIREWORKS` also works). Setting `OSF_MODEL`
-there selects the engine at startup so you don't have to type `/model` each time. `/model off`
-returns to the offline worker.
+there selects the engine at startup. `/model off` returns to the offline worker. If planning fails
+— no key, provider down — the shell says so and falls back to your request as written rather than
+dropping it.
 
 ## 4. Create a new repository
 
@@ -100,16 +126,15 @@ declares, shows you the objective and the gates it derived, and asks before doin
     2. Blank repository  README and .gitignore only
   › 1
 ? Primary language (python) ›
-? Owner (your GitHub user or org) (aelliot) › me
   objective: Create a new python repository 'widgets' with CI/CD: A widget library
   gates: README.md exists, LICENSE exists, .gitignore exists, .github/workflows/ci.yml exists
-? Run it on me/widgets with fireworks/accounts/fireworks/models/kimi-k2p7-code? (Y/n) y
+? Run it on AaEll/widgets with fireworks/accounts/fireworks/models/kimi-k2p7-code? (Y/n) y
   create-repo-widgets: done
   create-repo-widgets-scaffold: merged (PR#1, rounds=1)
 ```
 
 Questions in parentheses show a default — press Enter to take it. On a select, press Enter for the
-`›` option or type its number.
+`›` option or type its number. The owner is detected, not asked (see above).
 
 **Starting point** is the choice that changes the work:
 
@@ -204,6 +229,7 @@ Python — see [`running-the-loop.md`](running-the-loop.md).
 | `set GITHUB_TOKEN or GH_TOKEN for GitHubForge` | `/forge github` without a token |
 | `no engine adapter for provider 'x'` | `/model` provider is not `fireworks` or `anthropic` |
 | `'my repo!' isn't a valid repository name` | letters, numbers, dot, dash, underscore only — the question is asked again |
+| `planner unavailable (...)` | no key or the provider is down; the shell falls back to your request, ungated |
 | everything escalates | usually the offline scripted worker — set `/model` |
 
 Errors are reported and the prompt returns; a failed run never drops you out of the shell, and a
@@ -213,5 +239,7 @@ rejected answer is re-asked rather than abandoning what you were doing.
 
 - No live GitHub loop until the git-remote isolation backend lands (see §6).
 - The outcome doesn't report the workspace path, so scaffolded files must be found by hand (§4).
-- Free text is matched to an objective, not to a run: the shell won't infer "make me a repo" and
-  open `/new-repo` for you. Prepackaged workflows are reached by command.
+- Free text is planned as an objective, not matched to a run: the shell won't infer "make me a
+  repo" and open `/new-repo` for you. Prepackaged workflows are reached by command.
+- Steps cannot build on each other — each runs in its own empty workspace, so the planner is told
+  to keep them independent. Shared context across steps needs the git-remote isolation backend.

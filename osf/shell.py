@@ -19,14 +19,14 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from osf.config import default_owner, parse_repo, valid_owner, valid_repo_name
+from osf.config import default_owner, detected_owner, parse_repo, valid_repo_name
 from osf.driver import Driver, ObjectiveOutcome
 from osf.forge import Forge
 from osf.local.forge import InMemoryForge
 from osf.local.isolation import TempdirIsolation
-from osf.model import Objective
+from osf.planner import Exchange, Planner, ProposedPlan, StaticPlanner
 from osf.prompts import STYLE, Cancelled, Choice, confirm, select, text
-from osf.review import AcceptanceReviewer
+from osf.review import AcceptanceReviewer, PlanReviewer
 from osf.runs import PrepackagedRun, all_runs, execute, get_run
 from osf.runtime import AgentRuntime
 from osf.types import ModelRef, RepoRef
@@ -55,6 +55,13 @@ class Session:
         from osf.engines import resolve_runtime
 
         return resolve_runtime(self.model)
+
+    def planner(self) -> Planner:
+        if self.model is None:
+            return StaticPlanner()
+        from osf.engines import resolve_planner
+
+        return resolve_planner(self.model)
 
     def make_forge(self) -> Forge:
         if self.forge == "memory":
@@ -134,37 +141,67 @@ class Shell:
     # --- free-text objectives -------------------------------------------------------------
 
     def objective(self, goal: str) -> None:
+        """Plan the request with the user, then reconcile the plan they accepted."""
         repo = self.session.repo or self._ask_repo()
-        criteria = text(
-            "Acceptance criteria naming files, comma-separated", required=False
-        )
-        objective = Objective(
-            id=f"{repo.owner}-{repo.name}",
-            repo=repo,
-            goal=goal,
-            acceptance_criteria=[c.strip() for c in criteria.split(",") if c.strip()],
-        )
+        plan = self.negotiate(goal)
+        if plan is None:
+            self.note("not run")
+            return
+
+        objective_id = f"{repo.owner}-{repo.name}"
+        objective = plan.objective(objective_id, repo)
+        items = plan.work_items(objective_id)
         driver = Driver(
             runtime=self.session.runtime(),
             isolation=TempdirIsolation(),
             forge=self.session.make_forge(),
-            reviewer=AcceptanceReviewer(list(objective.acceptance_criteria)),
+            reviewer=PlanReviewer(plan.criteria_by_item(objective_id)),
+            decompose=lambda _objective: items,
             max_rounds=self.session.max_rounds,
         )
         self._report(asyncio.run(driver.run(objective)))
 
-    def _ask_repo(self) -> RepoRef:
-        """Ask for the target repo as two plain questions, not one `owner/name` string."""
-        name = text("Repository name", validate=valid_repo_name)
-        if "/" in name:  # someone typed the full owner/name — take it as given
-            repo = parse_repo(name)
-        else:
-            owner = text(
-                "Owner (your GitHub user or org)",
-                default=default_owner(),
-                validate=valid_owner,
+    def negotiate(self, request: str) -> ProposedPlan | None:
+        """Show the driver's plan and revise it until the user accepts — or declines."""
+        exchanges: list[Exchange] = []
+        while True:
+            plan = self.propose(request, exchanges)
+            self._show_plan(plan)
+            answer = text(
+                "Run this? (Enter to accept, or say what to change)", required=False
             )
-            repo = RepoRef(owner=owner, name=name)
+            if not answer or answer.lower() in _ACCEPT:
+                return plan
+            if answer.lower() in _DECLINE:
+                return None
+            exchanges.append((plan, answer))
+
+    def propose(self, request: str, exchanges: list[Exchange]) -> ProposedPlan:
+        """Ask the planner for a plan, falling back to the literal request if it can't."""
+        self.note("planning…")
+        try:
+            return self.session.planner().propose(request, exchanges)
+        except Exception as exc:
+            self.error(f"planner unavailable ({type(exc).__name__}: {exc})")
+            self.note("falling back to the request as written")
+            return StaticPlanner().propose(request, exchanges)
+
+    def _show_plan(self, plan: ProposedPlan) -> None:
+        self.say(f"  {STYLE.bold('plan')}  {plan.goal}")
+        for index, step in enumerate(plan.steps, start=1):
+            gate = STYLE.dim(f"  → {', '.join(step.files)}") if step.files else ""
+            self.say(f"    {index}. {step.spec}{gate}")
+        if not plan.files:
+            self.say(f"    {STYLE.dim('no file gate — the first green PR merges')}")
+
+    def _ask_repo(self) -> RepoRef:
+        """Ask only for a name. The owner is detected, never demanded.
+
+        Work starts as a local `git init` repo, so an account is beside the point until you point
+        the shell at a forge — at which point we use whatever `gh` is signed in as.
+        """
+        name = text("Repository name", validate=valid_repo_name)
+        repo = parse_repo(name) if "/" in name else RepoRef(default_owner(), name)
         self.session.repo = repo
         self.note(f"repo: {_repo_str(repo)}")
         return repo
@@ -274,6 +311,8 @@ def _cmd_forge(shell: Shell, rest: str) -> None:
             shell.error("forge must be memory, github, or github-org")
             return
         shell.session.forge = rest
+        if rest != "memory" and detected_owner() is None:
+            shell.error("no GitHub account detected — run `gh auth login` or set OSF_OWNER")
     shell.note(f"forge: {shell.session.forge}")
 
 
@@ -324,6 +363,10 @@ _COMMANDS = (
 )
 
 _ALIASES = {"h": "help", "exit": "quit", "q": "quit"}
+
+# Answers to "Run this?" that mean yes or no rather than "change it to…".
+_ACCEPT = frozenset({"y", "yes", "ok", "run", "go", "accept"})
+_DECLINE = frozenset({"n", "no", "cancel", "stop", "abort"})
 
 
 def default_session() -> Session:

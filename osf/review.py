@@ -46,6 +46,21 @@ def paths_in(criterion: str) -> list[str]:
 
 
 @dataclass(frozen=True, slots=True)
+class PlanReviewer:
+    """Reviews each WorkItem against its own step's files.
+
+    Steps run in separate workspaces, so item N is judged only on what step N promised; anything
+    without a gate of its own is approved on the first green round.
+    """
+
+    criteria_by_item: dict[str, list[str]]
+
+    async def review(self, work_item: WorkItem, workspace: Workspace) -> Review:
+        criteria = self.criteria_by_item.get(work_item.id, [])
+        return await AcceptanceReviewer(criteria).review(work_item, workspace)
+
+
+@dataclass(frozen=True, slots=True)
 class AcceptanceReviewer:
     """Approves when every file named in the acceptance criteria exists in the workspace."""
 

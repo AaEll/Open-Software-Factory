@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 from osf.engines._tools import (
     WORKER_SYSTEM,
@@ -20,6 +20,7 @@ from osf.engines._tools import (
     WRITE_TOOL_PARAMETERS,
     apply_write,
 )
+from osf.planner import PLAN_SYSTEM, Exchange, ProposedPlan, build_messages, parse_plan
 from osf.runtime import AgentEvent, AgentResult
 from osf.types import ModelRef, SessionId, Workspace
 
@@ -112,3 +113,26 @@ class FireworksRuntime:
                     transcript.append(AgentEvent(kind="error", data={"message": outcome}))
 
         return AgentResult(outcome="failed", transcript=transcript, cost_usd=0.0)
+
+
+class FireworksPlanner:
+    """Proposes plans with the same model, as a plain completion — no tools, no workspace."""
+
+    def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
+        self._model = model
+
+    def propose(self, request: str, exchanges: Sequence[Exchange] = ()) -> ProposedPlan:
+        import os
+
+        from openai import OpenAI  # lazy: keeps the dependency optional
+
+        api_key = os.environ.get("FIREWORKS_API_KEY") or os.environ.get("FIREWORKS")
+        if not api_key:
+            raise RuntimeError("set FIREWORKS_API_KEY (or FIREWORKS) in the environment or .env")
+        client = OpenAI(base_url=BASE_URL, api_key=api_key)
+        messages = [{"role": "system", "content": PLAN_SYSTEM}]
+        messages.extend(build_messages(request, exchanges))
+        response = client.chat.completions.create(
+            model=self._model.model_id, messages=messages, max_tokens=2000
+        )
+        return parse_plan(response.choices[0].message.content or "", fallback_goal=request)

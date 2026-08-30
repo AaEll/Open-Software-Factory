@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from osf.config import default_owner, valid_owner, valid_repo_name
+from osf.config import default_owner, valid_repo_name
 from osf.driver import Driver, ObjectiveOutcome, Reviewer
 from osf.forge import Forge
 from osf.isolation import IsolationBackend
@@ -152,7 +152,7 @@ def _build_create_repo(params: dict) -> Plan:
     name = params["name"]
     description = params.get("description", "")
     language = params.get("language", "python")
-    owner = params.get("owner", "osf")
+    owner = params.get("owner") or default_owner()
     template = params.get("template", "ci-cd")
     if template not in _TEMPLATES:
         raise ValueError(f"unknown template {template!r}; expected one of {sorted(_TEMPLATES)}")
@@ -193,12 +193,6 @@ CREATE_REPO = PrepackagedRun(
             ),
         ),
         RunParam("language", "Primary language", default="python"),
-        RunParam(
-            "owner",
-            "Owner (your GitHub user or org)",
-            default_factory=default_owner,
-            validate=valid_owner,
-        ),
     ),
 )
 
