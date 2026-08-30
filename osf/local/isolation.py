@@ -33,10 +33,15 @@ class TempdirIsolation:
         )
         return ExecResult(exit_code=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
 
+    async def checkpoint(self, ws: Workspace, message: str) -> None:
+        """Commit the work. A no-op commit (nothing changed this round) is fine and ignored."""
+        await self._git(ws.path, "add", "-A")
+        await self._git(ws.path, "commit", "-q", "-m", message, allow_failure=True)
+
     async def cleanup(self, ws: Workspace) -> None:
         await asyncio.to_thread(shutil.rmtree, ws.path, True)
 
-    async def _git(self, path: str, *args: str) -> None:
+    async def _git(self, path: str, *args: str, allow_failure: bool = False) -> None:
         result = await asyncio.to_thread(
             subprocess.run,
             ["git", *_GIT_IDENTITY, *args],
@@ -44,5 +49,5 @@ class TempdirIsolation:
             capture_output=True,
             text=True,
         )
-        if result.returncode != 0:
+        if result.returncode != 0 and not allow_failure:
             raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")

@@ -9,7 +9,7 @@ How to start OSF's driver control loop — the autonomous
 > | Piece | What it is | Offline option | Real option |
 > |---|---|---|---|
 > | `runtime` | the agent engine that does the work | `osf.local.runtime.StaticSiteRuntime` | `osf.engines.resolve_runtime(ModelRef)` (Fireworks/Claude) |
-> | `isolation` | where the worker runs | `osf.local.isolation.TempdirIsolation` | *(git-remote backend pending)* |
+> | `isolation` | where the worker runs | `osf.local.isolation.TempdirIsolation` | `osf.local.project.ProjectIsolation` (the user's own repo) |
 > | `forge` | PRs/reviews/merges | `osf.local.forge.InMemoryForge` | `osf.forges.github.GitHubForge` |
 > | `reviewer` | the definition of "done" | you supply one (below) | you supply one |
 
@@ -37,7 +37,7 @@ and revises on feedback; you accept it or say what to change. `osf.planner` hold
 | Command | Sets |
 |---|---|
 | `/model provider/model` | the engine workers run on (default: Fireworks if a key is present, else the offline scripted runtime) |
-| `/forge memory\|github\|github-org` | `memory` (default) is a dry run; `github` needs `GITHUB_TOKEN` |
+| `/forge local\|memory\|github` | `local` (default) edits your repository in place; `memory` is a dry run in `$TMPDIR`; `github` needs `GITHUB_TOKEN` |
 | `/rounds N` | review iterations per WorkItem before escalating (default 3) |
 | `/ask on\|off` | whether the driver asks clarifying questions before planning |
 | `/repo name` or `/repo owner/name` | the target repository (a bare name uses your account) |

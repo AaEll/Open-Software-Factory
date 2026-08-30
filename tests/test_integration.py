@@ -77,7 +77,8 @@ def run_shell(monkeypatch, capsys):
             Session, "runtime", lambda _self: FireworksRuntime(DEFAULT_MODEL, client=client)
         )
         monkeypatch.setattr(sys, "stdin", io.StringIO(script))
-        Shell(Session(model=DEFAULT_MODEL)).run()
+        # forge="memory": these must never edit the repository the tests run in.
+        Shell(Session(model=DEFAULT_MODEL, forge="memory")).run()
         return capsys.readouterr().out
 
     return run

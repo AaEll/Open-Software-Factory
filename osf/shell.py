@@ -19,18 +19,21 @@ import importlib.util
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from osf.config import default_owner, detected_owner, parse_repo, valid_repo_name
 from osf.driver import Driver, ObjectiveOutcome
 from osf.forge import Forge
-from osf.local.forge import InMemoryForge
+from osf.isolation import IsolationBackend
+from osf.local.forge import InMemoryForge, NoForge
 from osf.local.isolation import TempdirIsolation
+from osf.local.project import ProjectIsolation, git_init, repo_root
 from osf.planner import Answer, Exchange, Planner, ProposedPlan, StaticPlanner
 from osf.prompts import STYLE, Cancelled, Choice, confirm, select, text
 from osf.review import AcceptanceReviewer, PlanReviewer
 from osf.runs import PrepackagedRun, all_runs, execute, get_run
 from osf.runtime import AgentRuntime
-from osf.types import ModelRef, RepoRef
+from osf.types import ModelRef, RepoRef, Workspace
 
 BANNER = "Open Software Factory"
 
@@ -39,9 +42,10 @@ BANNER = "Open Software Factory"
 class Session:
     """What the shell remembers between turns."""
 
+    project: Path | None = None  # the repository `sf` edits; None until resolved from the cwd
     repo: RepoRef | None = None
     model: ModelRef | None = None  # None -> the offline scripted worker
-    forge: str = "memory"  # "memory" | "github" | "github-org"
+    forge: str = "local"  # "local" | "memory" | "github" | "github-org"
     max_rounds: int = 3
     ask: bool = True  # let the driver ask clarifying questions before planning
 
@@ -66,11 +70,19 @@ class Session:
         return resolve_planner(self.model)
 
     def make_forge(self) -> Forge:
+        if self.forge == "local":
+            return NoForge()
         if self.forge == "memory":
             return InMemoryForge()
         from osf.forges.github import GitHubForge
 
         return GitHubForge(org=self.forge == "github-org")
+
+    def isolation(self) -> IsolationBackend:
+        """Where the work happens: your repository by default, a throwaway copy otherwise."""
+        if self.forge == "local" and self.project is not None:
+            return ProjectIsolation(self.project)
+        return TempdirIsolation()
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +120,9 @@ class Shell:
 
     def run(self) -> int:
         self.say(STYLE.bold(BANNER))
-        self.note(f"{self.session.engine} · forge {self.session.forge} · /help for commands")
+        where = self.session.project or (repo_root() if self.session.forge == "local" else None)
+        target = str(where) if where else f"forge {self.session.forge}"
+        self.note(f"{self.session.engine} · {target} · /help for commands")
         self.say()
         while self.running:
             try:
@@ -144,24 +158,78 @@ class Shell:
 
     def objective(self, goal: str) -> None:
         """Plan the request with the user, then reconcile the plan they accepted."""
-        repo = self.session.repo or self._ask_repo()
+        repo = self._target()
+        if repo is None:
+            return
         plan = self.negotiate(goal)
         if plan is None:
             self.note("not run")
             return
 
         objective_id = f"{repo.owner}-{repo.name}"
-        objective = plan.objective(objective_id, repo)
+        isolation = self.session.isolation()
         items = plan.work_items(objective_id)
         driver = Driver(
             runtime=self.session.runtime(),
-            isolation=TempdirIsolation(),
+            isolation=isolation,
             forge=self.session.make_forge(),
             reviewer=PlanReviewer(plan.criteria_by_item(objective_id)),
             decompose=lambda _objective: items,
             max_rounds=self.session.max_rounds,
         )
-        self._report(asyncio.run(driver.run(objective)))
+        before = self._snapshot(isolation)
+        self._report(asyncio.run(driver.run(plan.objective(objective_id, repo))))
+        self._settle(isolation, before)
+
+    def _target(self) -> RepoRef | None:
+        """What the work is aimed at: your project when local, a named repo otherwise."""
+        if self.session.forge != "local":
+            return self.session.repo or self._ask_repo()
+        project = self._ensure_project()
+        if project is None:
+            return None
+        return RepoRef(default_owner(), project.name)
+
+    def _ensure_project(self) -> Path | None:
+        """Resolve the repository `sf` edits, offering to create one if there isn't any."""
+        if self.session.project is not None:
+            return self.session.project
+        root = repo_root()
+        if root is None:
+            here = Path.cwd()
+            self.error(f"{here} is not a git repository")
+            if not confirm(f"Run git init in {here}?", default=False):
+                self.note("nothing to work in — cd into a repository, or use /forge memory")
+                return None
+            git_init(here)
+            root = here
+        self.session.project = root
+        self.note(f"project: {root}")
+        return root
+
+    def _snapshot(self, isolation: IsolationBackend) -> str | None:
+        """Capture the project before the agents touch it, so the change can be undone."""
+        if not isinstance(isolation, ProjectIsolation):
+            return None
+        return isolation.snapshot(Workspace(str(isolation.root), str(isolation.root)))
+
+    def _settle(self, isolation: IsolationBackend, before: str | None) -> None:
+        """Show what changed in the project and let the user keep it or put it back."""
+        if before is None or not isinstance(isolation, ProjectIsolation):
+            return
+        workspace = Workspace(str(isolation.root), str(isolation.root))
+        changed = isolation.changed_since(workspace, before)
+        if not changed:
+            self.note("no files changed")
+            return
+        self.say(f"  {STYLE.bold('changed')} in {isolation.root}")
+        for line in isolation.diff_since(workspace, before, stat=True).splitlines():
+            self.say(f"    {line.strip()}")
+        if confirm("Keep these changes?"):
+            self.note("kept — review them with git diff, commit when you're happy")
+            return
+        restored = isolation.restore(workspace, before)
+        self.note(f"reverted {len(restored)} file(s) to how they were")
 
     def negotiate(self, request: str) -> ProposedPlan | None:
         """Let the driver ask what it needs, then revise its plan until the user accepts."""
@@ -234,31 +302,58 @@ class Shell:
 
         self.note(f"objective: {plan.objective.goal}")
         self.note(f"gates: {', '.join(plan.objective.acceptance_criteria) or 'none'}")
-        target = f"{plan.objective.repo.owner}/{plan.objective.repo.name}"
-        if self.session.forge != "memory":
+        name = plan.objective.repo.name
+        if self.session.forge.startswith("github"):
+            target = f"{plan.objective.repo.owner}/{name}"
             self.error(f"this creates {target} on GitHub for real")
-        if not confirm(f"Run it on {target} with {self.session.engine}?"):
+        else:
+            target = f"./{name}" if self.session.forge == "local" else name
+        if not confirm(f"Run it in {target} with {self.session.engine}?"):
             self.note("not run")
             return
 
+        try:
+            isolation = self._run_isolation(plan.objective.repo.name)
+        except FileExistsError as exc:
+            self.error(str(exc))
+            return
         outcome = asyncio.run(
             execute(
                 plan,
                 runtime=self.session.runtime(),
-                isolation=TempdirIsolation(),
+                isolation=isolation,
                 forge=self.session.make_forge(),
                 reviewer=AcceptanceReviewer(list(plan.objective.acceptance_criteria)),
                 max_rounds=self.session.max_rounds,
             )
         )
         self._report(outcome)
+        if isinstance(isolation, ProjectIsolation):
+            self.note(f"scaffolded into {isolation.root}")
+
+    def _run_isolation(self, name: str) -> IsolationBackend:
+        """Where a prepackaged run builds.
+
+        Locally, "create a repository" means a real new directory beside the one you are in —
+        scaffolding a fresh project into an existing repo would dump a README and workflows on top
+        of someone's work. The other forges keep using a throwaway workspace.
+        """
+        if self.session.forge != "local":
+            return TempdirIsolation()
+        target = Path.cwd() / name
+        if target.exists() and any(target.iterdir()):
+            raise FileExistsError(f"{target} already exists and is not empty")
+        target.mkdir(parents=True, exist_ok=True)
+        git_init(target)
+        return ProjectIsolation(target)
 
     def _report(self, outcome: ObjectiveOutcome) -> None:
         colour = STYLE.green if outcome.state == "done" else STYLE.red
         self.say(f"  {outcome.objective_id}: {colour(outcome.state)}")
         for item in outcome.items:
-            pr = f"PR#{item.pr.number}" if item.pr else "no PR"
-            self.note(f"{item.work_item_id}: {item.state} ({pr}, rounds={item.rounds})")
+            # PR#0 is the null forge's stand-in — local work has no pull request to point at.
+            pr = f"PR#{item.pr.number}, " if item.pr and item.pr.number else ""
+            self.note(f"{item.work_item_id}: {item.state} ({pr}rounds={item.rounds})")
         if outcome.state != "done":
             self.note("try /rounds to allow more attempts, /model to use a real engine")
 
@@ -323,10 +418,32 @@ def _cmd_model(shell: Shell, rest: str) -> None:
     shell.note(f"engine: {shell.session.engine}")
 
 
+def _cmd_project(shell: Shell, rest: str) -> None:
+    if rest:
+        path = Path(rest).expanduser().resolve()
+        root = repo_root(path) if path.is_dir() else None
+        if root is None:
+            shell.error(f"{path} is not a git repository")
+            return
+        shell.session.project = root
+        shell.session.repo = None  # the target follows the project
+    shell.note(f"project: {shell.session.project or 'the directory you launched from'}")
+
+
+def _cmd_diff(shell: Shell, _rest: str) -> None:
+    project = shell.session.project or repo_root()
+    if project is None:
+        shell.error("no project — cd into a git repository")
+        return
+    isolation = ProjectIsolation(project)
+    status = isolation.exec_sync(["git", "status", "--short"])
+    shell.say(status.rstrip() or STYLE.dim("  working tree clean"))
+
+
 def _cmd_forge(shell: Shell, rest: str) -> None:
     if rest:
-        if rest not in ("memory", "github", "github-org"):
-            shell.error("forge must be memory, github, or github-org")
+        if rest not in ("local", "memory", "github", "github-org"):
+            shell.error("forge must be local, memory, github, or github-org")
             return
         shell.session.forge = rest
         if rest != "memory" and detected_owner() is None:
@@ -354,6 +471,7 @@ def _cmd_ask(shell: Shell, rest: str) -> None:
 
 def _cmd_status(shell: Shell, _rest: str) -> None:
     session = shell.session
+    shell.note(f"project: {session.project or 'the directory you launched from'}")
     shell.note(f"repo:   {_repo_str(session.repo)}")
     shell.note(f"engine: {session.engine}")
     shell.note(f"forge:  {session.forge}")
@@ -381,9 +499,11 @@ _COMMANDS = (
     Command("new-repo", "", "create and scaffold a new repository", _cmd_new_repo),
     Command("runs", "", "list the prepackaged runs", _cmd_runs),
     Command("run", "[name]", "start a prepackaged run", _cmd_run),
-    Command("repo", "[owner/name]", "set the target repository", _cmd_repo),
+    Command("project", "[path]", "the repository sf edits", _cmd_project),
+    Command("diff", "", "show what has changed in the project", _cmd_diff),
+    Command("repo", "[owner/name]", "set the target repository (non-local forges)", _cmd_repo),
     Command("model", "[provider/model|off]", "set the engine workers run on", _cmd_model),
-    Command("forge", "[memory|github|github-org]", "where PRs are opened", _cmd_forge),
+    Command("forge", "[local|memory|github]", "where the work lands", _cmd_forge),
     Command("rounds", "[n]", "review rounds before escalating", _cmd_rounds),
     Command("ask", "[on|off]", "let the driver ask before planning", _cmd_ask),
     Command("status", "", "show the session settings", _cmd_status),

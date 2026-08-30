@@ -32,7 +32,12 @@ def _plain_output(monkeypatch):
 
 
 def run_shell(script: str, capsys, session: Session | None = None) -> str:
-    """Feed `script` to a fresh shell and return everything it printed."""
+    """Feed `script` to a fresh shell and return everything it printed.
+
+    Defaults to the in-memory forge: the real default is `local`, which edits the repository the
+    tests are running in. Project-mode behaviour is covered in test_project.py against a tmp repo.
+    """
+    session = session if session is not None else Session(forge="memory")
     sys.stdin = io.StringIO(script)
     try:
         assert Shell(session).run() == 0
@@ -51,14 +56,14 @@ def test_help_lists_every_command(capsys):
 
 
 def test_status_shows_defaults(capsys):
-    out = run_shell("/status\n/quit\n", capsys)
+    out = run_shell("/status\n/quit\n", capsys, Session())
     assert "repo:   unset" in out
     assert "offline (scripted worker)" in out
-    assert "forge:  memory" in out
+    assert "forge:  local" in out  # your own repository, the opencode model
 
 
 def test_repo_model_forge_rounds_are_remembered(capsys):
-    session = Session()
+    session = Session(forge="memory")
     out = run_shell(
         "/repo me/site\n/model fireworks/kimi\n/forge github\n/rounds 5\n/quit\n",
         capsys,
@@ -78,7 +83,7 @@ def test_model_off_returns_to_the_offline_worker(capsys):
 
 
 def test_bad_settings_are_rejected_without_changing_state(capsys):
-    session = Session()
+    session = Session(forge="memory")
     out = run_shell("/forge nope\n/rounds 0\n/quit\n", capsys, session)
     assert session.forge == "memory"
     assert session.max_rounds == 3
@@ -118,7 +123,7 @@ def test_a_failing_command_does_not_kill_the_shell(capsys):
 
 
 def test_repo_command_accepts_a_bare_name(capsys):
-    session = Session()
+    session = Session(forge="memory")
     run_shell("/repo site\n/quit\n", capsys, session)
     assert session.repo == RepoRef("me", "site")  # owner falls back to your account
 
@@ -141,7 +146,7 @@ def test_objective_escalates_when_a_step_gate_is_unmet(capsys, monkeypatch):
 
 
 def test_objective_asks_only_for_a_name_and_detects_the_owner(capsys):
-    session = Session()
+    session = Session(forge="memory")
     out = run_shell("Landing page for demo.osf\nsite\n\n/quit\n", capsys, session)
     assert "Repository name" in out
     assert "Owner" not in out  # never asked — OSF_OWNER/gh/local decides it
@@ -150,14 +155,14 @@ def test_objective_asks_only_for_a_name_and_detects_the_owner(capsys):
 
 
 def test_objective_accepts_a_full_owner_name_at_the_name_question(capsys):
-    session = Session()
+    session = Session(forge="memory")
     run_shell("Landing page for demo.osf\nyou/site\n\n/quit\n", capsys, session)
     assert session.repo == RepoRef("you", "site")
 
 
 def test_a_rejected_answer_is_re_asked_without_losing_the_objective(capsys):
     # The reported bug: a bad repo answer used to abort the turn and drop the objective.
-    session = Session()
+    session = Session(forge="memory")
     out = run_shell(
         "Make a website for my dog\nmy site!\npobrecita\n\n/quit\n", capsys, session
     )
@@ -283,7 +288,7 @@ def test_new_repo_walks_the_declared_params(capsys):
     assert "Starting point" in out
     assert "Template with CI/CD" in out and "Blank repository" in out
     assert "README.md exists, .gitignore exists" in out  # the blank template's gates
-    assert "Run it on me/widgets" in out
+    assert "Run it in widgets" in out
     assert "not run" in out
 
 

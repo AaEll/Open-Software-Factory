@@ -52,6 +52,14 @@ Fireworks responses (`tests/fixtures/fireworks/`) through an httpx mock transpor
 clarify → plan → worker → merge path runs in CI with no key and no spend. Re-record with
 `python -m evals.record_fireworks`.
 
+**`sf` edits the user's own repository by default** (`osf/local/project.py`, the opencode model):
+the workspace *is* the project you launched from, every step shares it, and safety comes from
+snapshots rather than isolation — a git tree captured before the run, diffed after, restorable on
+request. Captures use a scratch `GIT_INDEX_FILE` so the user's staging area is never touched, and
+the driver checkpoints through `IsolationBackend.checkpoint` instead of committing, so we never
+write to someone's history. `NoForge` is the default forge: the review loop still runs, there is
+just no PR. `/forge memory|github` opts back into throwaway workspaces and real PRs.
+
 Isolation is tiered (worktree local / container cloud). Dev loop: `pip install -e ".[dev]"` then
 `ruff check .` and `pytest`; real engines need `pip install -e ".[agent]"`.
 

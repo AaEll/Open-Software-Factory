@@ -25,19 +25,24 @@ Extras add the real backends, and can be combined:
 pip install -e ".[agent,github]"     # everything needed for a live run
 ```
 
-## 2. Open the shell
+## 2. Open the shell — in your project
+
+`sf` works on the repository you launch it from, editing that working tree in place:
 
 ```console
+$ cd ~/code/my-project
 $ sf
 Open Software Factory
-  offline (scripted worker) · forge memory · /help for commands
+  fireworks/accounts/fireworks/models/kimi-k2p7-code · /Users/you/code/my-project · /help for commands
 
 ›
 ```
 
-The second line is your session: which engine workers run on, and where PRs are opened. Both start
-safe — a scripted offline worker and an in-memory forge — so nothing you type reaches the network
-until you change them. `/help` lists the commands; Ctrl-D or `/quit` leaves.
+The second line is your session: the engine, and the project being edited. `/project <path>` points
+it somewhere else, `/help` lists the commands, Ctrl-D or `/quit` leaves.
+
+If the directory isn't a git repository, `sf` offers to `git init` it — snapshots need git objects,
+and without them there would be no way to undo a change.
 
 Not sure the install is sound? `/smoke` drives the whole `objective → worker → PR → merge` pipeline
 offline and reports `smoke: ok`.
@@ -63,6 +68,24 @@ nothing until you accept:
   AaEll-pobrecita: done
   AaEll-pobrecita-1: merged (PR#1, rounds=1)
 ```
+
+After the run you see what changed and decide:
+
+```console
+  changed in /Users/you/code/my-project
+    index.html | 27 +++++++++++++++++++++++++++
+    styles.css |  8 ++++++++
+    2 files changed, 35 insertions(+)
+? Keep these changes? (Y/n) y
+  kept — review them with git diff, commit when you're happy
+```
+
+Answering `n` restores every file the run touched — additions deleted, edits and deletions put
+back — from a snapshot taken before it started.
+
+**`sf` never commits for you, and never stages anything.** Snapshots are captured through a private
+git index under `.git/`, so your staging area is exactly as you left it. The change lands in your
+working tree as unstaged edits and untracked files; committing, branching and pushing stay yours.
 
 **The driver asks before it plans.** Those questions are written by the driver agent for *your*
 request — not a fixed form — and your answers go into the plan it proposes. Press Enter to skip any
@@ -112,7 +135,7 @@ otherwise Fireworks whenever a `FIREWORKS_API_KEY` (or `FIREWORKS`) is in your e
 ```console
 $ sf
 Open Software Factory
-  fireworks/accounts/fireworks/models/kimi-k2p7-code · forge memory · /help for commands
+  fireworks/accounts/fireworks/models/kimi-k2p7-code · /Users/you/code/my-project · /help for commands
 ```
 
 With no key — or without the `agent` extra installed — it says `offline (scripted worker)` instead.
@@ -148,10 +171,14 @@ declares, shows you the objective and the gates it derived, and asks before doin
 ? Primary language (python) ›
   objective: Create a new python repository 'widgets' with CI/CD: A widget library
   gates: README.md exists, LICENSE exists, .gitignore exists, .github/workflows/ci.yml exists
-? Run it on AaEll/widgets with fireworks/accounts/fireworks/models/kimi-k2p7-code? (Y/n) y
+? Run it in ./widgets with fireworks/accounts/fireworks/models/kimi-k2p7-code? (Y/n) y
   create-repo-widgets: done
-  create-repo-widgets-scaffold: merged (PR#1, rounds=1)
+  create-repo-widgets-scaffold: merged (rounds=1)
+  scaffolded into /Users/you/code/widgets
 ```
+
+Locally this makes a **real new directory** next to the one you're in, `git init`s it, and scaffolds
+there — it does not pour a README and workflows on top of the project you're currently in.
 
 Questions in parentheses show a default — press Enter to take it. On a select, press Enter for the
 `›` option or type its number. The owner is detected, not asked (see above).
@@ -163,22 +190,22 @@ Questions in parentheses show a default — press Enter to take it. On a select,
 | Template with CI/CD | `README.md`, `LICENSE`, `.gitignore`, `.github/workflows/ci.yml` (+ `release.yml`) | `new-repo-ci` |
 | Blank repository | `README.md`, `.gitignore` | `new-repo-blank` |
 
-Those file lists *are* the acceptance criteria, so the PR cannot merge until they exist.
+Those file lists *are* the acceptance criteria: the step isn't accepted until they exist.
 
 This flow needs a real engine — the offline scripted worker cannot scaffold a repository, and the
 run will escalate. `/runs` lists the available workflows; `/run <name>` starts any of them.
 
 ### Finding what the worker wrote
 
-With `/forge memory` (the default) the scaffold lands in a throwaway workspace under your temp
-directory, named for the repo:
+Locally, the path is printed when the run finishes (`scaffolded into …`). Under `/forge memory` the
+scaffold goes to a throwaway workspace instead:
 
 ```bash
 ls -dt "${TMPDIR:-/tmp}"/osf-widgets-* | head -1     # newest workspace
 ```
 
-Inspect it with `git -C <path> show --stat HEAD`. Workspaces are not cleaned up, so delete them when
-you're done. (The outcome does not yet print this path — see the gaps below.)
+Inspect it with `git -C <path> show --stat HEAD`. Those workspaces are never cleaned up, so delete
+them when you're done.
 
 ## 5. Session commands
 
@@ -187,9 +214,11 @@ you're done. (The outcome does not yet print this path — see the gaps below.)
 | `/help` | list the commands |
 | `/new-repo` | create and scaffold a new repository |
 | `/runs`, `/run [name]` | list the prepackaged runs; start one |
-| `/repo [name\|owner/name]` | set the target repository (bare name → your account) |
+| `/project [path]` | the repository `sf` edits (default: the one you launched from) |
+| `/diff` | what has changed in the project (`git status --short`) |
+| `/repo [name\|owner/name]` | target repository, for the non-local forges |
 | `/model [provider/model\|off]` | set the engine workers run on |
-| `/forge [memory\|github\|github-org]` | where PRs are opened |
+| `/forge [local\|memory\|github\|github-org]` | where the work lands (default `local`: your repo, no PRs) |
 | `/rounds [n]` | review rounds before a WorkItem escalates (default 3) |
 | `/ask [on\|off]` | whether the driver asks clarifying questions before planning (default on) |
 | `/status` | show all of the above |
@@ -198,7 +227,19 @@ you're done. (The outcome does not yet print this path — see the gaps below.)
 
 Called with no argument, the setting commands print the current value instead of changing it.
 
-## 6. Against real GitHub
+## 6. Working somewhere other than your repo
+
+`/forge` chooses where the work lands:
+
+| Mode | Where the work goes | PRs |
+|---|---|---|
+| `local` (default) | the repository you launched from, in place | none |
+| `memory` | a throwaway git repo under `$TMPDIR`, one per step | in-process only |
+| `github` / `github-org` | provisions a real repository | real, on GitHub |
+
+`memory` is the dry run: steps get separate scratch workspaces, so they cannot build on each other
+and the output lives in `$TMPDIR/osf-<name>-*`, which is never cleaned up. `local` is the mode that
+behaves the way you'd expect a coding agent to.
 
 ```console
 › /forge github
@@ -260,8 +301,9 @@ rejected answer is re-asked rather than abandoning what you were doing.
 ## Known gaps
 
 - No live GitHub loop until the git-remote isolation backend lands (see §6).
-- The outcome doesn't report the workspace path, so scaffolded files must be found by hand (§4).
+- Under `/forge memory` the outcome doesn't report the workspace path (locally it does).
 - Free text is planned as an objective, not matched to a run: the shell won't infer "make me a
   repo" and open `/new-repo` for you. Prepackaged workflows are reached by command.
-- Steps cannot build on each other — each runs in its own empty workspace, so the planner is told
-  to keep them independent. Shared context across steps needs the git-remote isolation backend.
+- With `/forge memory` or `github`, steps still get separate scratch workspaces and cannot build on
+  each other. Locally they share the project, so they can.
+- Nothing removes `$TMPDIR/osf-*` workspaces left by the non-local forges.
