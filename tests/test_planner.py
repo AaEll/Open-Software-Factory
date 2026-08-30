@@ -166,10 +166,25 @@ def test_propose_gives_up_after_the_retry():
 
 def test_propose_passes_the_plan_system_prompt():
     def complete(system, messages, max_tokens):
-        assert system is PLAN_SYSTEM
+        assert system == PLAN_SYSTEM
         return '{"goal": "g", "steps": ["a"]}'
 
     assert propose_with_retry(complete, "Build a site").goal == "g"
+
+
+def test_the_prompt_reflects_whether_steps_share_a_workspace():
+    """A plan that may extend earlier work is only legal when the steps share a repository."""
+    seen = []
+
+    def complete(system, messages, max_tokens):
+        seen.append(system)
+        return '{"goal": "g", "steps": ["a"]}'
+
+    propose_with_retry(complete, "Build a site", shared_workspace=True)
+    propose_with_retry(complete, "Build a site", shared_workspace=False)
+    assert "each seeing the files the previous steps wrote" in seen[0]
+    assert "must stand alone" not in seen[0]
+    assert "must stand alone" in seen[1]
 
 
 def test_answers_reach_the_model_as_context():

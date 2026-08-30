@@ -54,8 +54,6 @@ nothing until you accept:
 
 ```console
 › Create a landing page for my dog Pobrecita
-? Repository name › pobrecita
-  repo: AaEll/pobrecita
   a few questions before I plan (Enter to skip any):
 ? What is the main purpose: playful profile, memorial, adoption page? › playful profile
 ? What sections must be included (bio, photos, stats, contact)? › bio and photos
@@ -65,8 +63,8 @@ nothing until you accept:
     1. Create a responsive landing page with a hero section, a short bio and a photo gallery
        area, using HTML and CSS.  → index.html, styles.css
 ? Run this? (Enter to accept, or say what to change) ›
-  AaEll-pobrecita: done
-  AaEll-pobrecita-1: merged (PR#1, rounds=1)
+  you-my-project: done
+  you-my-project-1: merged (rounds=1)
 ```
 
 After the run you see what changed and decide:
@@ -93,8 +91,8 @@ of them; skip them all and it plans from the request alone. `/ask off` turns the
 the session.
 
 **You never have to write a merge gate.** The `→ files` on each step *are* the definition of done:
-the PR for that step cannot merge until those files exist. The driver proposes them from your
-request; you just say whether the plan is right.
+the step isn't accepted until those files exist, and it retries until they do. The driver proposes
+them from your request; you just say whether the plan is right.
 
 **Feedback is plain language.** Anything that isn't Enter or `no` is treated as a change request,
 and the driver re-plans with it:
@@ -112,16 +110,18 @@ and the driver re-plans with it:
 
 Enter, `y`, `ok`, `run` accept; `n`, `no`, `cancel` abandon the request; anything else is feedback.
 
-Each step is built by its own agent in its own fresh workspace and reviewed only against its own
-files — which is why steps must stand alone rather than build on each other.
+Each step is built by its own agent and reviewed against its own files. Locally the steps run in
+order **in the same repository**, so a later step sees what the earlier ones wrote and can extend
+it — ask for "a landing page, then a gallery page linked from it" and the link actually works. The
+planner is told which mode it is in, because under `/forge memory` steps get separate workspaces
+and must stand alone.
 
 ### About the repository name
 
-Only the name is asked. The owner is detected — `OSF_OWNER`, `GITHUB_OWNER`, `GH_OWNER` or
-`GITHUB_USER` if set, otherwise whoever `gh auth login` signed in as (read from
-`~/.config/gh/hosts.yml`, never over the network), and `local` if nothing is signed in. Work happens
-in a local `git init` workspace regardless; the owner only matters once you point the shell at a
-forge. Typing `owner/name` at the name question still works if you want to be explicit.
+Local work needs no name: the project you are in *is* the target. The other forges ask for one, and
+detect the owner — `OSF_OWNER`, `GITHUB_OWNER`, `GH_OWNER` or `GITHUB_USER` if set, otherwise
+whoever `gh auth login` signed in as (read from `~/.config/gh/hosts.yml`, never over the network),
+and `local` if nothing is signed in. Typing `owner/name` at the name question works too.
 
 Answers are checked as you give them: an unusable name is explained and asked again, in place. A
 typo never costs you the request you just typed.

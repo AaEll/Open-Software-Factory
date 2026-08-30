@@ -31,18 +31,37 @@ CLARIFY_SYSTEM = (
     "request is already clear enough to plan, return an empty list."
 )
 
-PLAN_SYSTEM = (
+_PLAN_BASE = (
     "You are the driver agent of an autonomous software factory. Turn the user's request into a "
     "short delivery plan.\n"
     "Reply with JSON only, no prose, in this exact shape:\n"
     '{"goal": "one sentence restating what to build", "steps": ['
     '{"spec": "one self-contained unit of work", "files": ["files this step produces"]}]}\n'
-    "Rules: 1-3 steps. Each step is built by a separate agent in its own empty workspace, so a "
-    "step must stand alone and must not depend on files another step writes. A step's `files` are "
-    "its definition of done: list only files you are confident that step must produce (e.g. "
-    "index.html), relative to the repo root, and keep the list short — prefer fewer, surer files. "
-    "If the user gives feedback on a plan, return the whole revised plan, not a diff."
+    "Rules: 1-3 steps. A step's `files` are its definition of done: list only files you are "
+    "confident that step must produce (e.g. index.html), relative to the repo root, and keep the "
+    "list short — prefer fewer, surer files. If the user gives feedback on a plan, return the "
+    "whole revised plan, not a diff.\n"
 )
+# Whether steps share a workspace is a property of the isolation backend, and it changes what a
+# plan may assume: in the user's own repo each step sees the last one's work, in throwaway
+# per-step workspaces it does not.
+_PLAN_SHARED = (
+    "The steps run in order in one repository, each seeing the files the previous steps wrote, so "
+    "a later step may extend or refine earlier work. Existing files in the repository may be "
+    "edited — say so in the step's spec when that is the intent."
+)
+_PLAN_ISOLATED = (
+    "Each step is built by a separate agent in its own empty workspace, so a step must stand alone "
+    "and must not depend on files another step writes."
+)
+
+
+def plan_system(*, shared_workspace: bool = False) -> str:
+    """The planning prompt, told whether steps can build on each other."""
+    return _PLAN_BASE + (_PLAN_SHARED if shared_workspace else _PLAN_ISOLATED)
+
+
+PLAN_SYSTEM = plan_system()  # the isolated default, kept for callers that don't care
 
 RETRY_NUDGE = (
     "That reply was not usable. Reply with JSON only — no prose, no code fences — in exactly the "
@@ -127,6 +146,8 @@ class Planner(Protocol):
         request: str,
         exchanges: Sequence[Exchange] = (),
         answers: Sequence[Answer] = (),
+        *,
+        shared_workspace: bool = False,
     ) -> ProposedPlan: ...
 
 
@@ -146,6 +167,8 @@ class StaticPlanner:
         request: str,
         exchanges: Sequence[Exchange] = (),
         answers: Sequence[Answer] = (),
+        *,
+        shared_workspace: bool = False,
     ) -> ProposedPlan:
         # Answers are deliberately dropped: with no model to interpret them, folding them into the
         # spec would just paste an interview transcript in as the work to do.
@@ -230,16 +253,18 @@ def propose_with_retry(
     answers: Sequence[Answer] = (),
     *,
     attempts: int = 2,
+    shared_workspace: bool = False,
 ) -> ProposedPlan:
     """Ask an engine for a plan, nudging it once if the reply isn't a usable plan.
 
     Models drift out of JSON now and then — a stray sentence, a truncated object. One corrective
     round trip recovers nearly all of it, and is far cheaper than dropping the user's request.
     """
+    system = plan_system(shared_workspace=shared_workspace)
     messages = build_messages(request, exchanges, answers)
     last: ValueError | None = None
     for _attempt in range(attempts):
-        reply = complete(PLAN_SYSTEM, messages, 2000)
+        reply = complete(system, messages, 2000)
         try:
             return parse_plan(reply, fallback_goal=request)
         except ValueError as exc:

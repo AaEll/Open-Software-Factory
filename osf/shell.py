@@ -266,7 +266,9 @@ class Shell:
         """Ask the planner for a plan, falling back to the literal request if it can't."""
         self.note("planning…")
         try:
-            return self.session.planner().propose(request, exchanges, answers)
+            return self.session.planner().propose(
+                request, exchanges, answers, shared_workspace=self.session.forge == "local"
+            )
         except Exception as exc:
             self.error(f"planner unavailable ({type(exc).__name__}: {exc})")
             self.note("falling back to the request as written")

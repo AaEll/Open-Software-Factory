@@ -183,9 +183,9 @@ def _plan(monkeypatch, *plans, questions=()):
         def clarify(self, request):
             return list(questions)
 
-        def propose(self, request, exchanges=(), answers=()):
-            self.answers = list(answers)
-            _Scripted.seen = self.answers
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False):
+            _Scripted.seen = list(answers)
+            _Scripted.shared = shared_workspace
             return remaining.pop(0) if remaining else last
 
     monkeypatch.setattr(Session, "planner", lambda _self: _Scripted())
@@ -226,7 +226,7 @@ def test_a_planner_failure_falls_back_to_the_request(capsys, monkeypatch):
         def clarify(self, request):
             return []
 
-        def propose(self, request, exchanges=(), answers=()):
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False):
             raise RuntimeError("no API key")
 
     monkeypatch.setattr(Session, "planner", lambda _self: _Broken())

@@ -167,8 +167,12 @@ class FireworksPlanner:
         request: str,
         exchanges: Sequence[Exchange] = (),
         answers: Sequence[Answer] = (),
+        *,
+        shared_workspace: bool = False,
     ) -> ProposedPlan:
-        return propose_with_retry(self._complete, request, exchanges, answers)
+        return propose_with_retry(
+            self._complete, request, exchanges, answers, shared_workspace=shared_workspace
+        )
 
     def _complete(self, system: str, messages: list[dict], max_tokens: int) -> str:
         client = make_client(self._client)

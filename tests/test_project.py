@@ -189,6 +189,29 @@ def test_project_command_rejects_a_non_repository(capsys, tmp_path: Path):
     assert session.project is None
 
 
+def test_the_planner_is_told_steps_share_the_project(capsys, repo: Path, monkeypatch):
+    """Locally, steps run in one repo — the planner must be allowed to build on earlier steps."""
+    seen = {}
+
+    class _Spy:
+        def clarify(self, request):
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False):
+            seen["shared"] = shared_workspace
+            from osf.planner import ProposedPlan, Step
+
+            return ProposedPlan("Do it", [Step("Write index.html", ["index.html"])])
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Spy())
+    run_shell("build something\n\ny\n/quit\n", capsys, Session(project=repo, forge="local"))
+    assert seen["shared"] is True
+
+    seen.clear()
+    run_shell("/repo me/site\nbuild something\n\n/quit\n", capsys, Session(forge="memory"))
+    assert seen["shared"] is False
+
+
 def test_diff_shows_the_working_tree(capsys, repo: Path):
     (repo / "scratch.txt").write_text("x", encoding="utf-8")
     session = Session(project=repo, forge="local")
