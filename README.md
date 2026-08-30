@@ -32,9 +32,21 @@ pytest
 
 ## Run the agent loop
 
-Start the driver control loop (`decompose → dispatch worker → open PR → review → merge`) from a few
-lines of Python — offline (no keys), with a real engine (Fireworks), or against real GitHub. Fastest
-check: `osf-smoke`. Full guide: [`docs/running-the-loop.md`](docs/running-the-loop.md).
+Start the driver control loop (`decompose → dispatch worker → open PR → review → merge`) with the
+`osf` CLI — offline (no keys), with a real engine (Fireworks), or against real GitHub:
+
+```bash
+pip install -e .
+osf smoke                      # offline end-to-end pipeline check
+osf runs                       # list the prepackaged runs
+osf objective "Create a landing page for demo.osf" \
+    --repo me/site --criterion "index.html exists"
+osf run create-repo -p name=widgets --model fireworks/accounts/fireworks/models/kimi-k2p7-code
+```
+
+Add `--forge github` (with `GITHUB_TOKEN`) to work against real repositories; omit `--model` to use
+the offline scripted worker. Full guide, including driving the loop from Python:
+[`docs/running-the-loop.md`](docs/running-the-loop.md).
 
 ## Eval
 

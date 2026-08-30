@@ -8,6 +8,7 @@ dependencies = []
 dynamic = ["version"] # derived from the git tag by hatch-vcs
 
 [project.scripts]
+osf = "osf.cli:main"
 osf-smoke = "osf.smoke:main"
 
 [project.optional-dependencies]

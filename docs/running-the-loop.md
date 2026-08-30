@@ -3,8 +3,8 @@
 How to start OSF's driver control loop — the autonomous
 `decompose → dispatch worker → open PR → review → merge` reconcile loop.
 
-> There is no CLI yet; you start the loop from a few lines of Python. You supply four pieces, all
-> behind swappable contracts:
+> The `osf` CLI (below) covers the common cases; anything else you assemble from a few lines of
+> Python. Either way you supply four pieces, all behind swappable contracts:
 >
 > | Piece | What it is | Offline option | Real option |
 > |---|---|---|---|
@@ -13,7 +13,35 @@ How to start OSF's driver control loop — the autonomous
 > | `forge` | PRs/reviews/merges | `osf.local.forge.InMemoryForge` | `osf.forges.github.GitHubForge` |
 > | `reviewer` | the definition of "done" | you supply one (below) | you supply one |
 
-## 0. Fastest check — the offline smoke
+## 0. The CLI
+
+`pip install -e .` puts an `osf` command on your PATH:
+
+```bash
+osf smoke                      # offline end-to-end pipeline check
+osf runs                       # list the prepackaged runs
+osf objective "Create a landing page for demo.osf" \
+    --repo me/site --criterion "index.html exists"
+osf run create-repo -p name=widgets -p description="A widget library" \
+    --model fireworks/accounts/fireworks/models/kimi-k2p7-code
+```
+
+Shared flags on `objective`/`run`:
+
+| Flag | Meaning |
+|---|---|
+| `--model provider/model` | engine for the workers; omit it for the offline scripted runtime |
+| `--forge memory\|github` | `memory` (default) is a dry run; `github` needs `GITHUB_TOKEN` |
+| `--org` | with `--forge github`, create repos under an organization |
+| `--max-rounds N` | review iterations per WorkItem before escalating (default 3) |
+| `--json` | print the outcome as JSON |
+
+The reviewer is [`AcceptanceReviewer`](../osf/review.py): it approves once every file named in the
+objective's acceptance criteria exists in the workspace (`--criterion "README.md exists"`). Criteria
+that name no file are informational and never block a merge. Exit status is `0` when the objective
+is `done`, `1` when it escalates.
+
+## 1. Fastest check — the offline smoke
 
 Proves the whole pipeline end-to-end with no keys or network:
 
@@ -22,7 +50,7 @@ pip install -e ".[dev]"
 osf-smoke        # objective → worker → PR → merge, exits 0 on success
 ```
 
-## 1. Run the loop on your own objective (offline)
+## 2. Run the loop on your own objective (offline)
 
 Copy-paste and run — this works with no keys (the scripted worker writes `index.html`, the reviewer
 approves once it exists, the in-memory forge merges):
@@ -66,7 +94,7 @@ asyncio.run(main())
 
 Expected: `state: done` and one merged PR.
 
-## 2. Run with a real agent engine (Fireworks)
+## 3. Run with a real agent engine (Fireworks)
 
 Swap the scripted worker for a real one. Model selection uses opencode's `provider/model`
 abstraction; default is Fireworks Kimi K2. Needs `FIREWORKS_API_KEY` in `.env`
@@ -82,7 +110,7 @@ runtime = resolve_runtime(DEFAULT_MODEL)  # or ModelRef.parse(os.environ["OSF_MO
 # ...pass runtime=runtime into the Driver above.
 ```
 
-## 3. Prepackaged run — create a repo with CI/CD
+## 4. Prepackaged run — create a repo with CI/CD
 
 Trigger a named workflow instead of hand-building an objective. `create-repo` provisions the repo on
 the forge and has the worker scaffold `README`/`LICENSE`/`.gitignore` **and** `.github/workflows/`
@@ -125,7 +153,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## 4. Against real GitHub
+## 5. Against real GitHub
 
 Swap the forge for `GitHubForge` (needs `GITHUB_TOKEN`/`GH_TOKEN`, `pip install -e ".[github]"`):
 

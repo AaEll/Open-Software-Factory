@@ -29,6 +29,10 @@ into `eval/<repo-name>/` and grades it — verified passing 4/4 on
 `fireworks/accounts/fireworks/models/kimi-k2p7-code`. Secrets in `.env` (gitignored):
 `FIREWORKS_API_KEY` (or `FIREWORKS`); override model with `OSF_MODEL`.
 
+The `osf` CLI (`osf/cli.py`) drives all of this from the shell — `osf smoke`, `osf runs`,
+`osf run <name>`, `osf objective <goal> --repo owner/name` — with `--model`/`--forge` choosing the
+engine and forge, and `osf/review.py`'s `AcceptanceReviewer` as the default definition of done.
+
 Isolation is tiered (worktree local / container cloud). Dev loop: `pip install -e ".[dev]"` then
 `ruff check .` and `pytest`; real engines need `pip install -e ".[agent]"`.
 
