@@ -14,11 +14,15 @@ import asyncio
 from collections.abc import AsyncIterator, Sequence
 
 from osf.engines._tools import (
-    WORKER_SYSTEM,
+    READ_TOOL_DESCRIPTION,
+    READ_TOOL_NAME,
+    READ_TOOL_PARAMETERS,
     WRITE_TOOL_DESCRIPTION,
     WRITE_TOOL_NAME,
     WRITE_TOOL_PARAMETERS,
+    apply_read,
     apply_write,
+    worker_system,
 )
 from osf.planner import (
     CLARIFY_SYSTEM,
@@ -45,6 +49,11 @@ _WRITE_TOOL = {
     "name": WRITE_TOOL_NAME,
     "description": WRITE_TOOL_DESCRIPTION,
     "input_schema": WRITE_TOOL_PARAMETERS,
+}
+_READ_TOOL = {
+    "name": READ_TOOL_NAME,
+    "description": READ_TOOL_DESCRIPTION,
+    "input_schema": READ_TOOL_PARAMETERS,
 }
 
 
@@ -92,8 +101,8 @@ class ClaudeRuntime:
                 model=self._model.model_id,
                 max_tokens=16000,
                 thinking={"type": "adaptive"},
-                system=WORKER_SYSTEM,
-                tools=[_WRITE_TOOL],
+                system=worker_system(workspace),
+                tools=[_WRITE_TOOL, _READ_TOOL],
                 messages=messages,
             )
             cost += response.usage.input_tokens * _INPUT_COST
@@ -108,8 +117,12 @@ class ClaudeRuntime:
                 if block.type != "tool_use":
                     continue
                 path = block.input["path"]
-                message, is_error = apply_write(workspace, path, block.input["content"])
-                transcript.append(AgentEvent(kind="file.write", data={"path": path}))
+                if block.name == READ_TOOL_NAME:
+                    message, is_error = apply_read(workspace, path)
+                    transcript.append(AgentEvent(kind="file.read", data={"path": path}))
+                else:
+                    message, is_error = apply_write(workspace, path, block.input["content"])
+                    transcript.append(AgentEvent(kind="file.write", data={"path": path}))
                 results.append(
                     {
                         "type": "tool_result",

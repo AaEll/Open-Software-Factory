@@ -13,12 +13,14 @@ exercised on every CI run without a key and without spending anything again.
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
-from osf.engines._tools import WORKER_SYSTEM
+from osf.engines._tools import worker_system
 from osf.engines.fireworks import _TOOLS, BASE_URL, DEFAULT_MODEL, require_api_key
 from osf.planner import CLARIFY_SYSTEM, PLAN_SYSTEM, ROUTE_SYSTEM, build_messages, route_catalog
 from osf.runs import all_runs
+from osf.types import Workspace
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "fireworks"
 REQUEST = "Create a landing page for my dog Pobrecita"
@@ -124,9 +126,13 @@ def main() -> None:
 
 
 def _record_worker(client, name: str, spec: str, *, max_steps: int = 6) -> None:
+    # Record against a real (empty) workspace, so the fixture answers the prompt the engine
+    # actually sends — working directory and contents included.
+    with tempfile.TemporaryDirectory(prefix="osf-record-") as tmp:
+        system = worker_system(Workspace(path=tmp, handle=tmp))
     messages: list[dict] = [{"role": "user", "content": spec}]
     for step in range(1, max_steps + 1):
-        response = _complete(client, WORKER_SYSTEM, messages, 16000, tools=_TOOLS)
+        response = _complete(client, system, messages, 16000, tools=_TOOLS)
         _save(f"worker_{name}_{step}", response)
         message = response.choices[0].message
         messages.append(message.model_dump(exclude_none=True))

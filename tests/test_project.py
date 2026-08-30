@@ -266,3 +266,52 @@ def test_diff_shows_the_working_tree(capsys, repo: Path):
     session = Session(project=repo, forge="local")
     out = run_shell("/diff\n/quit\n", capsys, session)
     assert "scratch.txt" in out
+
+
+# --- what the worker is told about where it is working ------------------------------------------
+
+
+def test_the_worker_prompt_names_the_working_directory(repo: Path):
+    from osf.engines._tools import worker_system
+
+    prompt = worker_system(Workspace(path=str(repo), handle=str(repo)))
+    assert str(repo) in prompt
+    assert "README.md" in prompt  # and what is already in it
+
+
+def test_an_empty_workspace_is_described_as_empty(tmp_path: Path):
+    from osf.engines._tools import worker_system
+
+    assert "It is empty." in worker_system(Workspace(path=str(tmp_path), handle=str(tmp_path)))
+
+
+def test_the_listing_hides_ignored_files(repo: Path):
+    """`.env` and `node_modules/` must not be paraded through the prompt."""
+    from osf.engines._tools import workspace_listing
+
+    (repo / ".gitignore").write_text(".env\nnode_modules/\n", encoding="utf-8")
+    (repo / ".env").write_text("FIREWORKS_API_KEY=secret", encoding="utf-8")
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "junk.js").write_text("x", encoding="utf-8")
+    (repo / "app.py").write_text("print('hi')", encoding="utf-8")
+
+    listing = workspace_listing(Workspace(path=str(repo), handle=str(repo)))
+    assert "app.py" in listing
+    assert ".env" not in listing
+    assert not any(path.startswith("node_modules") for path in listing)
+
+
+def test_the_listing_is_bounded(repo: Path):
+    from osf.engines._tools import LISTING_LIMIT, workspace_listing
+
+    for index in range(LISTING_LIMIT + 20):
+        (repo / f"file{index:03d}.txt").write_text("x", encoding="utf-8")
+    listing = workspace_listing(Workspace(path=str(repo), handle=str(repo)))
+    assert len(listing) == LISTING_LIMIT  # a big repo must not crowd out the request
+
+
+def test_a_directory_without_git_is_still_listed(tmp_path: Path):
+    from osf.engines._tools import workspace_listing
+
+    (tmp_path / "notes.md").write_text("x", encoding="utf-8")
+    assert workspace_listing(Workspace(path=str(tmp_path), handle=str(tmp_path))) == ["notes.md"]

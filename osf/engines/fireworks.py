@@ -15,11 +15,15 @@ import os
 from collections.abc import AsyncIterator, Sequence
 
 from osf.engines._tools import (
-    WORKER_SYSTEM,
+    READ_TOOL_DESCRIPTION,
+    READ_TOOL_NAME,
+    READ_TOOL_PARAMETERS,
     WRITE_TOOL_DESCRIPTION,
     WRITE_TOOL_NAME,
     WRITE_TOOL_PARAMETERS,
+    apply_read,
     apply_write,
+    worker_system,
 )
 from osf.planner import (
     CLARIFY_SYSTEM,
@@ -67,7 +71,15 @@ _TOOLS = [
             "description": WRITE_TOOL_DESCRIPTION,
             "parameters": WRITE_TOOL_PARAMETERS,
         },
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": READ_TOOL_NAME,
+            "description": READ_TOOL_DESCRIPTION,
+            "parameters": READ_TOOL_PARAMETERS,
+        },
+    },
 ]
 
 
@@ -119,7 +131,7 @@ class FireworksRuntime:
     def _run_loop(self, workspace: Workspace, prompt: str) -> AgentResult:
         client = make_client(self._client)
         messages: list[dict] = [
-            {"role": "system", "content": WORKER_SYSTEM},
+            {"role": "system", "content": worker_system(workspace)},
             {"role": "user", "content": prompt},
         ]
         transcript: list[AgentEvent] = []
@@ -139,8 +151,12 @@ class FireworksRuntime:
 
             for call in message.tool_calls:
                 args = json.loads(call.function.arguments)
-                outcome, is_error = apply_write(workspace, args["path"], args["content"])
-                transcript.append(AgentEvent(kind="file.write", data={"path": args["path"]}))
+                if call.function.name == READ_TOOL_NAME:
+                    outcome, is_error = apply_read(workspace, args["path"])
+                    transcript.append(AgentEvent(kind="file.read", data={"path": args["path"]}))
+                else:
+                    outcome, is_error = apply_write(workspace, args["path"], args["content"])
+                    transcript.append(AgentEvent(kind="file.write", data={"path": args["path"]}))
                 messages.append(
                     {"role": "tool", "tool_call_id": call.id, "content": outcome}
                 )

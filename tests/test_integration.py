@@ -169,7 +169,7 @@ def test_each_call_uses_the_right_system_prompt(run_shell):
     )
     assert replay.systems[0].startswith(ROUTE_SYSTEM)  # the catalog is appended to it
     assert replay.systems[1:3] == [CLARIFY_SYSTEM, PLAN_SYSTEM]
-    assert set(replay.systems[3:]) == {WORKER_SYSTEM}  # every remaining call is the worker
+    assert all(system.startswith(WORKER_SYSTEM) for system in replay.systems[3:])
 
 
 def test_the_worker_writes_the_recorded_file_into_its_workspace(run_shell, monkeypatch):

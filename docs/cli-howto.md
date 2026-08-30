@@ -141,7 +141,12 @@ and the driver re-plans with it:
 
 Enter, `y`, `ok`, `run` accept; `n`, `no`, `cancel` abandon the request; anything else is feedback.
 
-Each step is built by its own agent and reviewed against its own files. Locally the steps run in
+Each step is built by its own agent, which is told the working directory it is in and what that
+directory already contains (git's view of it, so ignored files like `.env` and `node_modules/` stay
+out). It can read a file before rewriting it, which is what lets it extend existing work rather
+than replace it.
+
+Each step is reviewed against its own files. Locally the steps run in
 order **in the same repository**, so a later step sees what the earlier ones wrote and can extend
 it — ask for "a landing page, then a gallery page linked from it" and the link actually works. The
 planner is told which mode it is in, because under `/forge memory` steps get separate workspaces
