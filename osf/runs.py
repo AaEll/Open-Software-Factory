@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from osf.config import default_owner, valid_owner, valid_repo_name
 from osf.driver import Driver, ObjectiveOutcome, Reviewer
 from osf.forge import Forge
 from osf.isolation import IsolationBackend
@@ -38,7 +39,9 @@ class RunParam:
     """One question a run needs answered before it can build a plan.
 
     `choices` (non-empty) makes it a single-select; otherwise it is free text. `default` fills in a
-    blank answer. `required` parameters refuse an empty answer — everything else may be skipped.
+    blank answer, or `default_factory` computes one when it depends on the environment. `required`
+    parameters refuse an empty answer — everything else may be skipped. `validate` cleans up an
+    answer or raises `ValueError`, which the dialog shows before asking again.
     """
 
     name: str
@@ -46,6 +49,11 @@ class RunParam:
     default: str = ""
     choices: tuple[Choice, ...] = ()
     required: bool = True
+    default_factory: Callable[[], str] | None = None
+    validate: Callable[[str], str] | None = None
+
+    def resolve_default(self) -> str:
+        return self.default_factory() if self.default_factory else self.default
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,7 +181,7 @@ CREATE_REPO = PrepackagedRun(
     description="Create and scaffold a new repository for the user.",
     build=_build_create_repo,
     params=(
-        RunParam("name", "Repository name"),
+        RunParam("name", "Repository name", validate=valid_repo_name),
         RunParam("description", "What should it do?", required=False),
         RunParam(
             "template",
@@ -185,7 +193,12 @@ CREATE_REPO = PrepackagedRun(
             ),
         ),
         RunParam("language", "Primary language", default="python"),
-        RunParam("owner", "Owner (the owner half of owner/name)", default="osf"),
+        RunParam(
+            "owner",
+            "Owner (your GitHub user or org)",
+            default_factory=default_owner,
+            validate=valid_owner,
+        ),
     ),
 )
 

@@ -12,7 +12,7 @@ commands is how the tests drive it. Ctrl-C / EOF raise `Cancelled`, which the ca
 from __future__ import annotations
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 
@@ -64,14 +64,33 @@ def _ask(prompt: str) -> str:
         raise Cancelled from exc
 
 
-def text(message: str, *, default: str = "", required: bool = True) -> str:
-    """Ask a free-text question. Empty input takes the default; re-asks if required and unset."""
+def text(
+    message: str,
+    *,
+    default: str = "",
+    required: bool = True,
+    validate: Callable[[str], str] | None = None,
+) -> str:
+    """Ask a free-text question. Empty input takes the default; re-asks if required and unset.
+
+    `validate` returns the cleaned-up answer or raises `ValueError` with an explanation. A rejected
+    answer is re-asked in place — the question is never abandoned over a typo, so whatever the user
+    was in the middle of survives.
+    """
     suffix = STYLE.dim(f" ({default})") if default else ""
     while True:
         answer = _ask(f"{STYLE.cyan('?')} {message}{suffix} {STYLE.dim('›')} ") or default
-        if answer or not required:
+        if not answer and not required:
             return answer
-        print(STYLE.red("  a value is required"))
+        if not answer:
+            print(STYLE.red("  a value is required"))
+            continue
+        if validate is None:
+            return answer
+        try:
+            return validate(answer)
+        except ValueError as exc:
+            print(STYLE.red(f"  {exc}"))
 
 
 def select(message: str, options: Sequence[Choice], *, default: str = "") -> str:

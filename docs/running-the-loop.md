@@ -32,6 +32,7 @@ $ sf
 | `/model provider/model` | the engine workers run on (default: the offline scripted runtime) |
 | `/forge memory\|github\|github-org` | `memory` (default) is a dry run; `github` needs `GITHUB_TOKEN` |
 | `/rounds N` | review iterations per WorkItem before escalating (default 3) |
+| `/repo name` or `/repo owner/name` | the target repository (a bare name uses your account) |
 | `/new-repo`, `/run [name]` | start a prepackaged run, question by question |
 
 The reviewer is [`AcceptanceReviewer`](../osf/review.py): it approves once every file named in the

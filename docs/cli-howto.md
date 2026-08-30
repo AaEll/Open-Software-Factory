@@ -49,11 +49,20 @@ first time and remembers it:
 
 ```console
 › Create a landing page for demo.osf
-? Repository (owner/name) › me/site
+? Repository name › pobrecita
+? Owner (your GitHub user or org) (aelliot) ›
+  repo: aelliot/pobrecita
 ? Acceptance criteria naming files, comma-separated › index.html exists
-  me-site: done
-  me-site-1: merged (PR#1, rounds=1)
+  aelliot-pobrecita: done
+  aelliot-pobrecita-1: merged (PR#1, rounds=1)
 ```
+
+The owner defaults to your account — `OSF_OWNER`, `GITHUB_OWNER`, `GH_OWNER`, or `GITHUB_USER` if
+one is set, otherwise your local username — so Enter is usually the right answer. If you prefer to
+type `owner/name` in one go, the name question takes that too.
+
+Answers are checked as you give them: an unusable name is explained and asked again, in place. A
+typo never costs you the objective you just typed.
 
 The objective became one WorkItem, a worker ran in an isolated git workspace, the forge opened
 PR #1, the reviewer checked that `index.html` existed, and it merged.
@@ -91,7 +100,7 @@ declares, shows you the objective and the gates it derived, and asks before doin
     2. Blank repository  README and .gitignore only
   › 1
 ? Primary language (python) ›
-? Owner (the owner half of owner/name) (osf) › me
+? Owner (your GitHub user or org) (aelliot) › me
   objective: Create a new python repository 'widgets' with CI/CD: A widget library
   gates: README.md exists, LICENSE exists, .gitignore exists, .github/workflows/ci.yml exists
 ? Run it on me/widgets with fireworks/accounts/fireworks/models/kimi-k2p7-code? (Y/n) y
@@ -133,7 +142,7 @@ you're done. (The outcome does not yet print this path — see the gaps below.)
 | `/help` | list the commands |
 | `/new-repo` | create and scaffold a new repository |
 | `/runs`, `/run [name]` | list the prepackaged runs; start one |
-| `/repo [owner/name]` | set the target repository for free-text objectives |
+| `/repo [name\|owner/name]` | set the target repository (bare name → your account) |
 | `/model [provider/model\|off]` | set the engine workers run on |
 | `/forge [memory\|github\|github-org]` | where PRs are opened |
 | `/rounds [n]` | review rounds before a WorkItem escalates (default 3) |
@@ -194,10 +203,11 @@ Python — see [`running-the-loop.md`](running-the-loop.md).
 | `ModuleNotFoundError: No module named 'openai'` | `/model` without the `agent` extra |
 | `set GITHUB_TOKEN or GH_TOKEN for GitHubForge` | `/forge github` without a token |
 | `no engine adapter for provider 'x'` | `/model` provider is not `fireworks` or `anthropic` |
-| `bad repo 'site'; expected OWNER/NAME` | `/repo` needs `owner/name` |
+| `'my repo!' isn't a valid repository name` | letters, numbers, dot, dash, underscore only — the question is asked again |
 | everything escalates | usually the offline scripted worker — set `/model` |
 
-Errors are reported and the prompt returns; a failed run never drops you out of the shell.
+Errors are reported and the prompt returns; a failed run never drops you out of the shell, and a
+rejected answer is re-asked rather than abandoning what you were doing.
 
 ## Known gaps
 

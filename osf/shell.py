@@ -19,6 +19,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from osf.config import default_owner, parse_repo, valid_owner, valid_repo_name
 from osf.driver import Driver, ObjectiveOutcome
 from osf.forge import Forge
 from osf.local.forge import InMemoryForge
@@ -112,6 +113,8 @@ class Shell:
                 self.dispatch(line)
             except Cancelled:
                 self.note("cancelled")
+            except ValueError as exc:  # bad input: the message is already written for a human
+                self.error(str(exc))
             except Exception as exc:  # a bad run must not take the shell down with it
                 self.error(f"{type(exc).__name__}: {exc}")
             self.say()
@@ -151,8 +154,19 @@ class Shell:
         self._report(asyncio.run(driver.run(objective)))
 
     def _ask_repo(self) -> RepoRef:
-        repo = parse_repo(text("Repository (owner/name)"))
+        """Ask for the target repo as two plain questions, not one `owner/name` string."""
+        name = text("Repository name", validate=valid_repo_name)
+        if "/" in name:  # someone typed the full owner/name — take it as given
+            repo = parse_repo(name)
+        else:
+            owner = text(
+                "Owner (your GitHub user or org)",
+                default=default_owner(),
+                validate=valid_owner,
+            )
+            repo = RepoRef(owner=owner, name=name)
         self.session.repo = repo
+        self.note(f"repo: {_repo_str(repo)}")
         return repo
 
     # --- prepackaged runs -------------------------------------------------------------------
@@ -196,16 +210,12 @@ class Shell:
 
 def ask_param(param) -> str:
     """Ask one `RunParam` using the widget its schema implies."""
+    default = param.resolve_default()
     if param.choices:
-        return select(param.prompt, param.choices, default=param.default)
-    return text(param.prompt, default=param.default, required=param.required)
-
-
-def parse_repo(ref: str) -> RepoRef:
-    owner, sep, name = ref.partition("/")
-    if not sep or not owner or not name:
-        raise ValueError(f"bad repo {ref!r}; expected OWNER/NAME")
-    return RepoRef(owner=owner, name=name)
+        return select(param.prompt, param.choices, default=default)
+    return text(
+        param.prompt, default=default, required=param.required, validate=param.validate
+    )
 
 
 # --- command handlers -----------------------------------------------------------------------
@@ -243,7 +253,10 @@ def _cmd_new_repo(shell: Shell, _rest: str) -> None:
 
 def _cmd_repo(shell: Shell, rest: str) -> None:
     if rest:
-        shell.session.repo = parse_repo(rest)
+        # `/repo site` is as good as `/repo me/site` — the owner falls back to your account.
+        shell.session.repo = (
+            parse_repo(rest) if "/" in rest else RepoRef(default_owner(), valid_repo_name(rest))
+        )
     shell.note(f"repo: {_repo_str(shell.session.repo)}")
 
 

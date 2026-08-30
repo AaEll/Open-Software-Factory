@@ -9,17 +9,19 @@ import sys
 
 import pytest
 
+from osf.config import default_owner, parse_repo, valid_repo_name
 from osf.prompts import Cancelled, Choice, Style, confirm, select, text
 from osf.runs import get_run
-from osf.shell import Session, Shell, parse_repo
+from osf.shell import Session, Shell
 from osf.types import ModelRef, RepoRef
 
 
 @pytest.fixture(autouse=True)
 def _plain_output(monkeypatch):
-    """Strip ANSI so assertions match on text, not escape codes."""
+    """Strip ANSI so assertions match on text, and pin the owner default to this machine."""
     monkeypatch.setattr("osf.prompts.STYLE", Style(enabled=False))
     monkeypatch.setattr("osf.shell.STYLE", Style(enabled=False))
+    monkeypatch.setenv("OSF_OWNER", "me")
 
 
 def run_shell(script: str, capsys, session: Session | None = None) -> str:
@@ -102,10 +104,16 @@ def test_smoke_command(capsys):
 
 
 def test_a_failing_command_does_not_kill_the_shell(capsys):
-    # A malformed repo raises inside the handler; the loop reports it and keeps going.
-    out = run_shell("/repo not-a-repo\n/status\n/quit\n", capsys)
-    assert "bad repo" in out
+    # An unusable name raises inside the handler; the loop explains it and keeps going.
+    out = run_shell("/repo not a repo!\n/status\n/quit\n", capsys)
+    assert "isn't a valid repository name" in out
     assert "repo:   unset" in out
+
+
+def test_repo_command_accepts_a_bare_name(capsys):
+    session = Session()
+    run_shell("/repo site\n/quit\n", capsys, session)
+    assert session.repo == RepoRef("me", "site")  # owner falls back to your account
 
 
 # --- free-text objectives ---------------------------------------------------------------------
@@ -128,11 +136,31 @@ def test_objective_escalates_when_a_criterion_is_unmet(capsys):
     assert "failed" in out
 
 
-def test_objective_asks_for_the_repo_when_unset(capsys):
+def test_objective_asks_for_name_and_owner_when_the_repo_is_unset(capsys):
     session = Session()
-    out = run_shell("Landing page for demo.osf\nme/site\n\n/quit\n", capsys, session)
-    assert session.repo == RepoRef("me", "site")  # asked once, then remembered
+    out = run_shell("Landing page for demo.osf\nsite\n\n\n/quit\n", capsys, session)
+    assert "Repository name" in out
+    assert "Owner (your GitHub user or org)" in out
+    assert session.repo == RepoRef("me", "site")  # owner defaulted, then remembered
     assert "done" in out
+
+
+def test_objective_accepts_a_full_owner_name_at_the_name_question(capsys):
+    session = Session()
+    run_shell("Landing page for demo.osf\nyou/site\n\n/quit\n", capsys, session)
+    assert session.repo == RepoRef("you", "site")
+
+
+def test_a_rejected_answer_is_re_asked_without_losing_the_objective(capsys):
+    # The reported bug: a bad repo answer used to abort the turn and drop the objective.
+    session = Session()
+    out = run_shell(
+        "Make a website for my dog\naaron/\nmy site!\npobrecita\n\n\n/quit\n", capsys, session
+    )
+    assert "isn't an owner/name pair" in out
+    assert "isn't a valid repository name" in out
+    assert session.repo == RepoRef("me", "pobrecita")
+    assert "done" in out  # the objective survived and still ran
 
 
 # --- the structured run wizard ------------------------------------------------------------------
@@ -252,7 +280,41 @@ def test_unknown_template_is_rejected():
         get_run("create-repo").build({"name": "widgets", "template": "nope"})
 
 
+@pytest.mark.parametrize(
+    ("bad", "message"),
+    [
+        ("site", "missing an owner"),
+        ("me/", "isn't an owner/name pair"),
+        ("/site", "isn't an owner/name pair"),
+        ("me/a/b", "isn't an owner/name pair"),
+        ("m e/site", "isn't a valid owner"),
+    ],
+)
+def test_parse_repo_explains_what_is_wrong(bad, message):
+    with pytest.raises(ValueError, match=message):
+        parse_repo(bad)
+
+
 def test_parse_repo():
     assert parse_repo("me/site") == RepoRef("me", "site")
-    with pytest.raises(ValueError):
-        parse_repo("site")
+    assert parse_repo("  me/site  ") == RepoRef("me", "site")
+
+
+def test_default_owner_prefers_the_environment(monkeypatch):
+    monkeypatch.setenv("OSF_OWNER", "acme")
+    assert default_owner() == "acme"
+    monkeypatch.delenv("OSF_OWNER")
+    monkeypatch.setenv("GITHUB_OWNER", "widgets-inc")
+    assert default_owner() == "widgets-inc"
+
+
+def test_text_re_asks_on_a_rejected_answer(monkeypatch, capsys):
+    _answers(monkeypatch, "not a repo!", "widgets")
+    assert text("Repository name", validate=valid_repo_name) == "widgets"
+    assert "isn't a valid repository name" in capsys.readouterr().out
+
+
+def test_create_repo_owner_default_comes_from_the_environment(monkeypatch):
+    monkeypatch.setenv("OSF_OWNER", "acme")
+    owner = next(p for p in get_run("create-repo").params if p.name == "owner")
+    assert owner.resolve_default() == "acme"
