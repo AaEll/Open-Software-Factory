@@ -11,7 +11,7 @@ the rest of OSF (and the offline eval) has no hard dependency on it.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 from osf.engines._tools import (
     WORKER_SYSTEM,
@@ -20,6 +20,7 @@ from osf.engines._tools import (
     WRITE_TOOL_PARAMETERS,
     apply_write,
 )
+from osf.planner import PLAN_SYSTEM, Exchange, ProposedPlan, build_messages, parse_plan
 from osf.runtime import AgentEvent, AgentResult
 from osf.types import ModelRef, SessionId, Workspace
 
@@ -110,3 +111,22 @@ class ClaudeRuntime:
             messages.append({"role": "user", "content": results})
 
         return AgentResult(outcome="failed", transcript=transcript, cost_usd=cost)
+
+
+class ClaudePlanner:
+    """Proposes plans with the same model, as a plain completion — no tools, no workspace."""
+
+    def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
+        self._model = model
+
+    def propose(self, request: str, exchanges: Sequence[Exchange] = ()) -> ProposedPlan:
+        import anthropic  # lazy: keeps the dependency optional
+
+        response = anthropic.Anthropic().messages.create(
+            model=self._model.model_id,
+            max_tokens=2000,
+            system=PLAN_SYSTEM,
+            messages=build_messages(request, exchanges),
+        )
+        text = "".join(block.text for block in response.content if block.type == "text")
+        return parse_plan(text, fallback_goal=request)

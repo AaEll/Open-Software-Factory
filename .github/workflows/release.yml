@@ -25,7 +25,7 @@ jobs:
       - name: predeployment smoke test (installed wheel)
         run: |
           pip install dist/*.whl
-          osf-smoke
+          sf-smoke
       - if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:

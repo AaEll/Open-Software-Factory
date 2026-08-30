@@ -32,9 +32,26 @@ pytest
 
 ## Run the agent loop
 
-Start the driver control loop (`decompose → dispatch worker → open PR → review → merge`) from a few
-lines of Python — offline (no keys), with a real engine (Fireworks), or against real GitHub. Fastest
-check: `osf-smoke`. Full guide: [`docs/running-the-loop.md`](docs/running-the-loop.md).
+`sf` opens a dialog with the driver. Say what you want; it proposes a plan, takes feedback until
+you accept, then reconciles it (`decompose → dispatch worker → open PR → review → merge`):
+
+```console
+$ sf
+Open Software Factory
+
+› Create a landing page for my dog Pobrecita
+? Repository name › pobrecita
+  planning…
+  plan  Build a charming single-page landing site for Pobrecita the dog.
+    1. Create a responsive landing page with a hero, a short bio and a photo
+       gallery area.  → index.html, styles.css
+? Run this? (Enter to accept, or say what to change) › also add a gallery page
+```
+
+The files on each step are the definition of done — proposed by the driver, not demanded of you.
+`/commands` reach the structured workflows (`/new-repo`), pick an engine (`/model`), and choose a
+forge (`/forge github`). Step-by-step: [`docs/cli-howto.md`](docs/cli-howto.md). Driving the loop
+from Python instead: [`docs/running-the-loop.md`](docs/running-the-loop.md).
 
 ## Eval
 
@@ -63,13 +80,13 @@ python -m evals.efactory_live
 ## CI/CD
 
 Three build artifacts: **wheel + sdist** for local `pip install`, and a **container** for cloud
-deployment. Each is gated by a **pass-through predeployment smoke test** — `osf-smoke` runs the whole
+deployment. Each is gated by a **pass-through predeployment smoke test** — `sf-smoke` runs the whole
 `objective → worker → PR → merge` pipeline (offline reference adapters) against the *installed*
 artifact and exits non-zero on failure.
 
 - **CI** (`.github/workflows/ci.yml`) on every push/PR: lint (`ruff`), test matrix (Python
-  3.11–3.13), `build` (wheel+sdist, then `osf-smoke` on the installed wheel), and `image` (docker
-  build, then `osf-smoke` in the container).
+  3.11–3.13), `build` (wheel+sdist, then `sf-smoke` on the installed wheel), and `image` (docker
+  build, then `sf-smoke` in the container).
 - **CD** (`.github/workflows/release.yml`) on version tags: publishes the **wheel + sdist** to a
   GitHub Release and pushes the **container** to GHCR (`ghcr.io/<owner>/open-software-factory`),
   each gated by the pass-through smoke. Artifact versions are derived from the git tag (`hatch-vcs`).
@@ -79,4 +96,4 @@ artifact and exits non-zero on failure.
   git tag v0.1.0 && git push origin v0.1.0
   ```
 
-Run the smoke locally with `osf-smoke` (after `pip install -e .`).
+Run the smoke locally with `sf-smoke` (after `pip install -e .`).

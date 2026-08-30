@@ -3,8 +3,8 @@
 How to start OSF's driver control loop — the autonomous
 `decompose → dispatch worker → open PR → review → merge` reconcile loop.
 
-> There is no CLI yet; you start the loop from a few lines of Python. You supply four pieces, all
-> behind swappable contracts:
+> The `sf` shell (below) covers the common cases; anything else you assemble from a few lines of
+> Python. Either way you supply four pieces, all behind swappable contracts:
 >
 > | Piece | What it is | Offline option | Real option |
 > |---|---|---|---|
@@ -13,16 +13,54 @@ How to start OSF's driver control loop — the autonomous
 > | `forge` | PRs/reviews/merges | `osf.local.forge.InMemoryForge` | `osf.forges.github.GitHubForge` |
 > | `reviewer` | the definition of "done" | you supply one (below) | you supply one |
 
-## 0. Fastest check — the offline smoke
+## 0. The CLI
+
+`pip install -e .` puts `sf` on your PATH. It opens a shell: plain language becomes an objective,
+`/commands` reach the structured flows.
+
+```console
+$ sf
+› /repo me/site
+› Create a landing page for demo.osf
+  planning…
+  plan  Build a landing page for demo.osf
+    1. Create index.html with a hero section and a short blurb.  → index.html
+? Run this? (Enter to accept, or say what to change) ›
+  me-site: done
+  me-site-1: merged (PR#1, rounds=1)
+```
+
+The driver proposes the plan and the files that define "done"; you accept it or say what to change.
+`osf.planner` holds that seam — `StaticPlanner` offline, `osf.engines.resolve_planner` for a real
+model.
+
+| Command | Sets |
+|---|---|
+| `/model provider/model` | the engine workers run on (default: the offline scripted runtime) |
+| `/forge memory\|github\|github-org` | `memory` (default) is a dry run; `github` needs `GITHUB_TOKEN` |
+| `/rounds N` | review iterations per WorkItem before escalating (default 3) |
+| `/repo name` or `/repo owner/name` | the target repository (a bare name uses your account) |
+| `/new-repo`, `/run [name]` | start a prepackaged run, question by question |
+
+The reviewer is [`AcceptanceReviewer`](../osf/review.py): it approves once every file named in the
+objective's acceptance criteria exists in the workspace. Criteria that name no file are
+informational and never block a merge. `PlanReviewer` wraps it to judge each WorkItem against its
+own step's files.
+
+Task-first walkthrough: [`cli-howto.md`](cli-howto.md). The rest of this page is the Python API the
+shell is built on — use it when you need something the shell doesn't offer, or automation without a
+TTY.
+
+## 1. Fastest check — the offline smoke
 
 Proves the whole pipeline end-to-end with no keys or network:
 
 ```bash
 pip install -e ".[dev]"
-osf-smoke        # objective → worker → PR → merge, exits 0 on success
+sf-smoke        # objective → worker → PR → merge, exits 0 on success
 ```
 
-## 1. Run the loop on your own objective (offline)
+## 2. Run the loop on your own objective (offline)
 
 Copy-paste and run — this works with no keys (the scripted worker writes `index.html`, the reviewer
 approves once it exists, the in-memory forge merges):
@@ -66,7 +104,7 @@ asyncio.run(main())
 
 Expected: `state: done` and one merged PR.
 
-## 2. Run with a real agent engine (Fireworks)
+## 3. Run with a real agent engine (Fireworks)
 
 Swap the scripted worker for a real one. Model selection uses opencode's `provider/model`
 abstraction; default is Fireworks Kimi K2. Needs `FIREWORKS_API_KEY` in `.env`
@@ -82,7 +120,7 @@ runtime = resolve_runtime(DEFAULT_MODEL)  # or ModelRef.parse(os.environ["OSF_MO
 # ...pass runtime=runtime into the Driver above.
 ```
 
-## 3. Prepackaged run — create a repo with CI/CD
+## 4. Prepackaged run — create a repo with CI/CD
 
 Trigger a named workflow instead of hand-building an objective. `create-repo` provisions the repo on
 the forge and has the worker scaffold `README`/`LICENSE`/`.gitignore` **and** `.github/workflows/`
@@ -125,7 +163,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## 4. Against real GitHub
+## 5. Against real GitHub
 
 Swap the forge for `GitHubForge` (needs `GITHUB_TOKEN`/`GH_TOKEN`, `pip install -e ".[github]"`):
 

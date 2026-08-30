@@ -29,6 +29,21 @@ into `eval/<repo-name>/` and grades it — verified passing 4/4 on
 `fireworks/accounts/fireworks/models/kimi-k2p7-code`. Secrets in `.env` (gitignored):
 `FIREWORKS_API_KEY` (or `FIREWORKS`); override model with `OSF_MODEL`.
 
+The `sf` CLI (`osf/cli.py` → `osf/shell.py`) is an interactive shell, the only user entry point:
+free text becomes an objective, `/commands` (`/new-repo`, `/run`, `/repo`, `/model`, `/forge`,
+`/rounds`) reach the structured flows. Prepackaged runs declare their questions as `RunParam`s
+(`osf/runs.py`) and the shell walks that schema — add a question to a run, not to the shell.
+`osf/prompts.py` is the dependency-free text/select/confirm toolkit.
+
+**The definition of done is negotiated, not demanded.** `osf/planner.py` has the driver propose a
+`ProposedPlan` (goal + steps, each step carrying the files it must produce); the shell shows it and
+folds plain-language feedback back into a re-plan until the user accepts. Those per-step files
+become the acceptance criteria `osf/review.py`'s `PlanReviewer`/`AcceptanceReviewer` enforce. Engine
+planners resolve like runtimes (`osf.engines.resolve_planner`); `StaticPlanner` is the offline
+reference and deliberately gates on nothing. The forge account is detected (env, then `gh`'s
+`hosts.yml`), never asked for — work is local `git init` until a forge is chosen. There are no flag-driven subcommands; the
+non-interactive gate for CI and the container is the separate `sf-smoke` script.
+
 Isolation is tiered (worktree local / container cloud). Dev loop: `pip install -e ".[dev]"` then
 `ruff check .` and `pytest`; real engines need `pip install -e ".[agent]"`.
 

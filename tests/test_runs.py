@@ -23,8 +23,8 @@ def test_create_repo_is_registered_and_builds_a_plan():
     assert plan.provision_repo is True  # the run creates the repo
     assert ".github/workflows/ci.yml exists" in plan.objective.acceptance_criteria
     (item,) = plan.work_items
-    assert item.skills == ["new-repo"]
-    assert plan.skills.get("new-repo").name == "new-repo"
+    assert item.skills == ["new-repo-ci"]
+    assert plan.skills.get("new-repo-ci").name == "new-repo-ci"
 
 
 def test_register_run_rejects_duplicates():
