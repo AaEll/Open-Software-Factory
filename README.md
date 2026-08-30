@@ -45,7 +45,8 @@ osf run create-repo -p name=widgets --model fireworks/accounts/fireworks/models/
 ```
 
 Add `--forge github` (with `GITHUB_TOKEN`) to work against real repositories; omit `--model` to use
-the offline scripted worker. Full guide, including driving the loop from Python:
+the offline scripted worker. Step-by-step, install through creating a new repository:
+[`docs/cli-howto.md`](docs/cli-howto.md). Driving the loop from Python:
 [`docs/running-the-loop.md`](docs/running-the-loop.md).
 
 ## Eval

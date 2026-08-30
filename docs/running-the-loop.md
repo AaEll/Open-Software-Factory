@@ -36,6 +36,8 @@ Shared flags on `objective`/`run`:
 | `--max-rounds N` | review iterations per WorkItem before escalating (default 3) |
 | `--json` | print the outcome as JSON |
 
+Task-first walkthrough of these commands: [`cli-howto.md`](cli-howto.md).
+
 The reviewer is [`AcceptanceReviewer`](../osf/review.py): it approves once every file named in the
 objective's acceptance criteria exists in the workspace (`--criterion "README.md exists"`). Criteria
 that name no file are informational and never block a merge. Exit status is `0` when the objective
