@@ -3,7 +3,7 @@
 How to start OSF's driver control loop — the autonomous
 `decompose → dispatch worker → open PR → review → merge` reconcile loop.
 
-> The `osf` CLI (below) covers the common cases; anything else you assemble from a few lines of
+> The `sf` CLI (below) covers the common cases; anything else you assemble from a few lines of
 > Python. Either way you supply four pieces, all behind swappable contracts:
 >
 > | Piece | What it is | Offline option | Real option |
@@ -15,14 +15,14 @@ How to start OSF's driver control loop — the autonomous
 
 ## 0. The CLI
 
-`pip install -e .` puts an `osf` command on your PATH:
+`pip install -e .` puts an `sf` command on your PATH:
 
 ```bash
-osf smoke                      # offline end-to-end pipeline check
-osf runs                       # list the prepackaged runs
-osf objective "Create a landing page for demo.osf" \
+sf smoke                      # offline end-to-end pipeline check
+sf runs                       # list the prepackaged runs
+sf objective "Create a landing page for demo.osf" \
     --repo me/site --criterion "index.html exists"
-osf run create-repo -p name=widgets -p description="A widget library" \
+sf run create-repo -p name=widgets -p description="A widget library" \
     --model fireworks/accounts/fireworks/models/kimi-k2p7-code
 ```
 
@@ -49,7 +49,7 @@ Proves the whole pipeline end-to-end with no keys or network:
 
 ```bash
 pip install -e ".[dev]"
-osf-smoke        # objective → worker → PR → merge, exits 0 on success
+sf-smoke        # objective → worker → PR → merge, exits 0 on success
 ```
 
 ## 2. Run the loop on your own objective (offline)

@@ -1,6 +1,6 @@
 # CLI how-to: from install to a new repository
 
-A task-first guide to the `osf` command. For the contracts underneath it — and for driving the loop
+A task-first guide to the `sf` command. For the contracts underneath it — and for driving the loop
 from Python instead — see [`running-the-loop.md`](running-the-loop.md).
 
 ## 1. Install
@@ -26,16 +26,16 @@ pip install -e ".[agent,github]"     # everything needed for a live run
 ## 2. Check the install
 
 ```bash
-osf smoke
+sf smoke
 ```
 
-Drives `objective → worker → PR → merge` against the offline adapters and prints `osf smoke: ok`.
+Drives `objective → worker → PR → merge` against the offline adapters and prints `sf smoke: ok`.
 No keys, no network. A non-zero exit means the install is broken, not your objective.
 
 ## 3. Your first objective (offline)
 
 ```bash
-osf objective "Create a landing page for demo.osf" \
+sf objective "Create a landing page for demo.osf" \
     --repo me/site \
     --criterion "index.html exists"
 ```
@@ -71,7 +71,7 @@ Select the engine with `--model provider/model` — the provider half picks the 
 (`fireworks` is the default engine, `anthropic` is the second). Pass the full ref:
 
 ```bash
-osf objective "Create a landing page for demo.osf" \
+sf objective "Create a landing page for demo.osf" \
     --repo me/site \
     --criterion "index.html exists" \
     --model fireworks/accounts/fireworks/models/kimi-k2p7-code
@@ -87,11 +87,11 @@ directory, not from the install location.
 all four exist.
 
 ```bash
-osf runs                  # create-repo  Create and scaffold a new repository for the user.
+sf runs                  # create-repo  Create and scaffold a new repository for the user.
 ```
 
 ```bash
-osf run create-repo \
+sf run create-repo \
     -p name=widgets \
     -p description="A widget library" \
     -p language=python \
@@ -111,7 +111,7 @@ Parameters (`-p key=value`, repeatable):
 | `name` | yes | — | repository name |
 | `description` | no | `""` | README/repo description |
 | `language` | no | `python` | told to the worker; shapes the `.gitignore` and CI workflow |
-| `owner` | no | `osf` | the owner half of `owner/name` |
+| `owner` | no | `sf` | the owner half of `owner/name` |
 
 Omitting `--model` runs the scripted worker, which cannot scaffold a repository — the run escalates
 after `--max-rounds` rounds. This command needs a real agent.
@@ -132,7 +132,7 @@ delete them when you're done. (The outcome does not yet print this path — see 
 ```bash
 pip install -e ".[github]"
 export GITHUB_TOKEN=ghp_...          # or GH_TOKEN; needs repo scope
-osf run create-repo -p name=widgets -p owner=me --forge github --model <ref>
+sf run create-repo -p name=widgets -p owner=me --forge github --model <ref>
 ```
 
 Add `--org` to create under an organization instead of the authenticated user.
@@ -147,7 +147,7 @@ Add `--org` to create under an organization instead of the authenticated user.
 
 ## Flag reference
 
-Shared by `osf objective` and `osf run`:
+Shared by `sf objective` and `sf run`:
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -157,8 +157,8 @@ Shared by `osf objective` and `osf run`:
 | `--max-rounds N` | `3` | review iterations per WorkItem before escalating |
 | `--json` | off | print the outcome as JSON instead of text |
 
-`osf objective` also takes `--repo OWNER/NAME` (required), `--criterion TEXT` (repeatable), and
-`--id` (defaults to `owner-name`). `osf run` takes `-p/--param KEY=VALUE` (repeatable).
+`sf objective` also takes `--repo OWNER/NAME` (required), `--criterion TEXT` (repeatable), and
+`--id` (defaults to `owner-name`). `sf run` takes `-p/--param KEY=VALUE` (repeatable).
 
 ## Reading the result
 
@@ -183,12 +183,12 @@ Shared by `osf objective` and `osf run`:
 
 | Symptom | Cause |
 |---|---|
-| `osf: command not found` | `pip install -e .` ran in a different environment than your shell's `python` |
+| `sf: command not found` | `pip install -e .` ran in a different environment than your shell's `python` |
 | `set FIREWORKS_API_KEY (or FIREWORKS) ...` | no key in the environment, or you ran from a directory above your `.env` |
 | `No module named 'openai'` | `--model` without the `agent` extra |
 | `set GITHUB_TOKEN or GH_TOKEN for GitHubForge` | `--forge github` without a token |
 | `no engine adapter for provider 'x'` | `--model` provider is not `fireworks` or `anthropic` |
-| `osf: bad --repo 'site'` | `--repo` needs `OWNER/NAME` |
+| `sf: bad --repo 'site'` | `--repo` needs `OWNER/NAME` |
 | run escalates immediately | usually the offline scripted worker — pass `--model` |
 
 ## Known gaps

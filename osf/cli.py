@@ -1,11 +1,11 @@
-"""The ``osf`` command line — start the factory without writing Python.
+"""The ``sf`` command line — start the factory without writing Python.
 
 Subcommands:
 
-* ``osf runs`` — list the prepackaged runs
-* ``osf run <name> -p k=v`` — execute a prepackaged run (e.g. ``create-repo``)
-* ``osf objective <goal> --repo owner/name`` — reconcile an ad-hoc objective
-* ``osf smoke`` — the offline pass-through smoke test
+* ``sf runs`` — list the prepackaged runs
+* ``sf run <name> -p k=v`` — execute a prepackaged run (e.g. ``create-repo``)
+* ``sf objective <goal> --repo owner/name`` — reconcile an ad-hoc objective
+* ``sf smoke`` — the offline pass-through smoke test
 
 Every command assembles the same four swappable pieces the driver needs — runtime, isolation,
 forge, reviewer — from flags: ``--model`` picks the engine (omit it for the offline scripted
@@ -34,14 +34,14 @@ from osf.types import ModelRef, RepoRef
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="osf", description="Objectives in, merged PRs out.")
+    parser = argparse.ArgumentParser(prog="sf", description="Objectives in, merged PRs out.")
     subs = parser.add_subparsers(dest="command", required=True)
 
     subs.add_parser("runs", help="list the prepackaged runs")
     subs.add_parser("smoke", help="run the offline end-to-end smoke test")
 
     run = subs.add_parser("run", help="execute a prepackaged run by name")
-    run.add_argument("name", help="run name (see `osf runs`)")
+    run.add_argument("name", help="run name (see `sf runs`)")
     run.add_argument(
         "-p",
         "--param",
@@ -92,7 +92,7 @@ def _parse_params(pairs: Sequence[str]) -> dict[str, str]:
     for pair in pairs:
         key, sep, value = pair.partition("=")
         if not sep or not key:
-            raise SystemExit(f"osf: bad --param {pair!r}; expected KEY=VALUE")
+            raise SystemExit(f"sf: bad --param {pair!r}; expected KEY=VALUE")
         params[key] = value
     return params
 
@@ -100,7 +100,7 @@ def _parse_params(pairs: Sequence[str]) -> dict[str, str]:
 def _parse_repo(ref: str) -> RepoRef:
     owner, sep, name = ref.partition("/")
     if not sep or not owner or not name:
-        raise SystemExit(f"osf: bad --repo {ref!r}; expected OWNER/NAME")
+        raise SystemExit(f"sf: bad --repo {ref!r}; expected OWNER/NAME")
     return RepoRef(owner=owner, name=name)
 
 
@@ -170,11 +170,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     try:
         run = get_run(args.name)
     except KeyError:
-        raise SystemExit(f"osf: unknown run {args.name!r}; see `osf runs`") from None
+        raise SystemExit(f"sf: unknown run {args.name!r}; see `sf runs`") from None
     try:
         plan = run.build(_parse_params(args.param))
     except KeyError as exc:
-        raise SystemExit(f"osf: run {run.name!r} needs --param {exc.args[0]}=...") from None
+        raise SystemExit(f"sf: run {run.name!r} needs --param {exc.args[0]}=...") from None
 
     outcome = asyncio.run(
         execute(

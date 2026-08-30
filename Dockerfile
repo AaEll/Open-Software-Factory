@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir .
 
 # No long-running server entrypoint yet (arrives with the Phase 2 driver loop); until then the
 # default command is the pass-through smoke so `docker run <image>` self-checks the build.
-CMD ["osf-smoke"]
+CMD ["sf-smoke"]

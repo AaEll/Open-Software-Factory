@@ -1,7 +1,7 @@
 """Packaged pass-through predeployment smoke test.
 
 Runs the whole objective -> worker -> PR -> merge pipeline against the offline local reference
-adapters (no network, no keys) and exits non-zero on failure. Exposed as the ``osf-smoke`` console
+adapters (no network, no keys) and exits non-zero on failure. Exposed as the ``sf-smoke`` console
 script so it validates the **installed** artifact (wheel or container image), not just the source
 tree — the gate a deploy pipeline runs before shipping.
 """
@@ -38,7 +38,7 @@ async def _run() -> bool:
 
 def main() -> None:
     ok = asyncio.run(_run())
-    print("osf smoke:", "ok" if ok else "FAILED")
+    print("sf smoke:", "ok" if ok else "FAILED")
     raise SystemExit(0 if ok else 1)
 
 

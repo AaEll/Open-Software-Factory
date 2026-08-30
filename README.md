@@ -33,15 +33,15 @@ pytest
 ## Run the agent loop
 
 Start the driver control loop (`decompose → dispatch worker → open PR → review → merge`) with the
-`osf` CLI — offline (no keys), with a real engine (Fireworks), or against real GitHub:
+`sf` CLI — offline (no keys), with a real engine (Fireworks), or against real GitHub:
 
 ```bash
 pip install -e .
-osf smoke                      # offline end-to-end pipeline check
-osf runs                       # list the prepackaged runs
-osf objective "Create a landing page for demo.osf" \
+sf smoke                      # offline end-to-end pipeline check
+sf runs                       # list the prepackaged runs
+sf objective "Create a landing page for demo.osf" \
     --repo me/site --criterion "index.html exists"
-osf run create-repo -p name=widgets --model fireworks/accounts/fireworks/models/kimi-k2p7-code
+sf run create-repo -p name=widgets --model fireworks/accounts/fireworks/models/kimi-k2p7-code
 ```
 
 Add `--forge github` (with `GITHUB_TOKEN`) to work against real repositories; omit `--model` to use
@@ -76,13 +76,13 @@ python -m evals.efactory_live
 ## CI/CD
 
 Three build artifacts: **wheel + sdist** for local `pip install`, and a **container** for cloud
-deployment. Each is gated by a **pass-through predeployment smoke test** — `osf-smoke` runs the whole
+deployment. Each is gated by a **pass-through predeployment smoke test** — `sf-smoke` runs the whole
 `objective → worker → PR → merge` pipeline (offline reference adapters) against the *installed*
 artifact and exits non-zero on failure.
 
 - **CI** (`.github/workflows/ci.yml`) on every push/PR: lint (`ruff`), test matrix (Python
-  3.11–3.13), `build` (wheel+sdist, then `osf-smoke` on the installed wheel), and `image` (docker
-  build, then `osf-smoke` in the container).
+  3.11–3.13), `build` (wheel+sdist, then `sf-smoke` on the installed wheel), and `image` (docker
+  build, then `sf-smoke` in the container).
 - **CD** (`.github/workflows/release.yml`) on version tags: publishes the **wheel + sdist** to a
   GitHub Release and pushes the **container** to GHCR (`ghcr.io/<owner>/open-software-factory`),
   each gated by the pass-through smoke. Artifact versions are derived from the git tag (`hatch-vcs`).
@@ -92,4 +92,4 @@ artifact and exits non-zero on failure.
   git tag v0.1.0 && git push origin v0.1.0
   ```
 
-Run the smoke locally with `osf-smoke` (after `pip install -e .`).
+Run the smoke locally with `sf-smoke` (after `pip install -e .`).
