@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-a69c021b20414e2880981db9057772ce",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Created `gallery.html` \u2014 a self-contained photo gallery page for Pobrecita with a responsive grid, lightbox viewer, and keyboard navigation.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "The file has been written. Now I need to give a brief response to the user, indicating that gallery.html has been created. No need to explain too much.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1788128865,
+  "model": "accounts/fireworks/models/kimi-k2p7-code",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 65,
+    "prompt_tokens": 3937,
+    "total_tokens": 4002,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 33,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "compute_units": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 218,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 33
+    }
+  }
+}

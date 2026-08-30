@@ -17,7 +17,7 @@ from osf.config import (
     parse_repo,
     valid_repo_name,
 )
-from osf.planner import ProposedPlan, Step
+from osf.planner import Decision, ProposedPlan, Step
 from osf.prompts import Cancelled, Choice, Style, confirm, select, text
 from osf.runs import get_run
 from osf.shell import Session, Shell, default_model, default_session
@@ -174,6 +174,9 @@ def _plan(monkeypatch, *plans, questions=()):
     last = plans[-1]
 
     class _Scripted:
+        def route(self, request, catalog=""):
+            return Decision(action="plan")
+
         def clarify(self, request):
             return list(questions)
 
@@ -217,6 +220,9 @@ def test_declining_the_plan_runs_nothing(capsys, monkeypatch):
 
 def test_a_planner_failure_falls_back_to_the_request(capsys, monkeypatch):
     class _Broken:
+        def route(self, request, catalog=""):
+            return Decision(action="plan")
+
         def clarify(self, request):
             return []
 
@@ -456,3 +462,66 @@ def test_create_repo_uses_the_detected_owner_without_asking(monkeypatch):
     monkeypatch.setenv("OSF_OWNER", "acme")
     plan = get_run("create-repo").build({"name": "widgets"})
     assert plan.objective.repo == RepoRef("acme", "widgets")
+
+
+# --- the driver routing what you type -------------------------------------------------------
+
+
+def _router(monkeypatch, decision: Decision):
+    class _Router:
+        def route(self, request, catalog=""):
+            _Router.catalog = catalog
+            return decision
+
+        def clarify(self, request):
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False):
+            return ProposedPlan("planned anyway", [Step(request)])
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Router())
+    return _Router
+
+
+def test_a_reply_is_printed_and_nothing_is_built(capsys, monkeypatch):
+    _router(monkeypatch, Decision(action="reply", message="Hi! What shall we build?"))
+    out = run_shell("/repo me/site\nhi bot\n/quit\n", capsys)
+    assert "Hi! What shall we build?" in out
+    assert "planning…" not in out
+
+
+def test_the_driver_is_shown_the_workflows_it_can_start(capsys, monkeypatch):
+    router = _router(monkeypatch, Decision(action="reply", message="hello"))
+    run_shell("/repo me/site\nhi\n/quit\n", capsys)
+    assert "create-repo" in router.catalog  # it can only choose a run it was told about
+
+
+def test_an_unknown_workflow_falls_back_to_planning(capsys, monkeypatch):
+    # A hallucinated run name must not dead-end the request.
+    _router(monkeypatch, Decision(action="run", run="not-a-real-run"))
+    out = run_shell("/repo me/site\nbuild me something\n\n/quit\n", capsys)
+    assert "planning…" in out
+    assert "me-site: done" in out
+
+
+def test_a_routing_failure_still_plans(capsys, monkeypatch):
+    class _Broken:
+        def route(self, request, catalog=""):
+            raise RuntimeError("provider down")
+
+        def clarify(self, request):
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False):
+            return ProposedPlan("planned anyway", [Step(request)])
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Broken())
+    out = run_shell("/repo me/site\nbuild me something\n\n/quit\n", capsys)
+    assert "driver unavailable" in out
+    assert "me-site: done" in out  # the request survived
+
+
+def test_an_offline_driver_routes_everything_to_planning(capsys):
+    # StaticPlanner has no judgement to apply, so it must not pretend to converse.
+    out = run_shell("/repo me/site\nhi bot\n\n/quit\n", capsys)
+    assert "planning…" in out

@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-a4fcd24a4b4f4642ba865d9687b82d23",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"action\": \"run\", \"run\": \"create-repo\", \"params\": {\"name\": \"widgets\", \"template\": \"blank\"}}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "The user wants me to create a new repository. This matches the \"create-repo\" workflow.\n\nParameters:\n- name: \"widgets\"\n- description: not provided, leave out\n- template: they say \"blank\" - this could mean no template. I should include \"blank\" as template? Or maybe omit since it's not a standard template value? Let me prefill with what they told me. They said \"blank\" which likely means a blank repository, no template. I'll include template: \"blank\" or perhaps leave out since \"blank\" isn't really a template. Actually, the instruction says \"prefill params with anything they already told you; leave out what they did not say\". So include template: \"blank\" and language not provided, no CI \u2014 but CI isn't in the params. Hmm, CI isn't listed. The template parameter might be how they specify blank. I'll put name: \"widgets\" and template: \"blank\". Maybe language is missing too.\n\nWait, the instructions say reply with JSON only. So I should output JSON.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1788128549,
+  "model": "accounts/fireworks/models/kimi-k2p7-code",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 244,
+    "prompt_tokens": 258,
+    "total_tokens": 502,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 214,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "compute_units": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 214
+    }
+  }
+}

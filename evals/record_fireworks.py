@@ -17,7 +17,8 @@ from pathlib import Path
 
 from osf.engines._tools import WORKER_SYSTEM
 from osf.engines.fireworks import _TOOLS, BASE_URL, DEFAULT_MODEL, require_api_key
-from osf.planner import CLARIFY_SYSTEM, PLAN_SYSTEM, build_messages
+from osf.planner import CLARIFY_SYSTEM, PLAN_SYSTEM, ROUTE_SYSTEM, build_messages, route_catalog
+from osf.runs import all_runs
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "fireworks"
 REQUEST = "Create a landing page for my dog Pobrecita"
@@ -72,6 +73,14 @@ def _complete(client, system: str, messages: list[dict], max_tokens: int, *, too
     )
 
 
+# The three ways the driver can read a message, so the integration tests can drive each path.
+ROUTE_CASES = [
+    ("route_plan", REQUEST),
+    ("route_reply", "hi bot"),
+    ("route_run", "make me a new repository called widgets, blank, no CI"),
+]
+
+
 def main() -> None:
     try:  # keys live in .env alongside the other live evals
         from dotenv import find_dotenv, load_dotenv
@@ -80,6 +89,15 @@ def main() -> None:
     except ImportError:
         pass
     client = _client()
+
+    catalog = route_catalog(
+        [(run.name, run.description, [p.name for p in run.params]) for run in all_runs()]
+    )
+    for name, message in ROUTE_CASES:
+        if _exists(name):
+            continue
+        system = f"{ROUTE_SYSTEM}\n\n{catalog}"
+        _save(name, _complete(client, system, [{"role": "user", "content": message}], 500))
 
     if not _exists("clarify"):
         questions = _complete(client, CLARIFY_SYSTEM, [{"role": "user", "content": REQUEST}], 500)
@@ -97,26 +115,33 @@ def main() -> None:
             ]
             _save("plan_revised", _complete(client, PLAN_SYSTEM, revised, 2000))
 
-    # Worker turns: the tool call that writes the file, then the turn that stops. One pair per
-    # step of the recorded plan, so an integration test can drive a multi-step plan to merge.
-    for name, spec, path in WORKER_TURNS:
-        if _exists(f"worker_{name}_write"):
+    # Worker turns. A turn is however many round trips the model takes to finish, so record the
+    # whole loop — assuming "tool call, then stop" is exactly the assumption that broke before.
+    for name, spec, _path in WORKER_TURNS:
+        if _exists(f"worker_{name}_1"):
             continue
-        messages = [{"role": "user", "content": spec}]
-        call = _complete(client, WORKER_SYSTEM, messages, 16000, tools=_TOOLS)
-        _save(f"worker_{name}_write", call)
-        message = call.choices[0].message
+        _record_worker(client, name, spec)
+
+
+def _record_worker(client, name: str, spec: str, *, max_steps: int = 6) -> None:
+    messages: list[dict] = [{"role": "user", "content": spec}]
+    for step in range(1, max_steps + 1):
+        response = _complete(client, WORKER_SYSTEM, messages, 16000, tools=_TOOLS)
+        _save(f"worker_{name}_{step}", response)
+        message = response.choices[0].message
         messages.append(message.model_dump(exclude_none=True))
-        for tool_call in message.tool_calls or []:
+        if not message.tool_calls:
+            return
+        for tool_call in message.tool_calls:
+            args = json.loads(tool_call.function.arguments)
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": f"Wrote {path} (1 bytes)",
+                    "content": f"Wrote {args['path']} ({len(args['content'])} bytes)",
                 }
             )
-        done = _complete(client, WORKER_SYSTEM, messages, 16000, tools=_TOOLS)
-        _save(f"worker_{name}_done", done)
+    print(f"warning: {name} did not stop within {max_steps} steps")
 
 
 if __name__ == "__main__":

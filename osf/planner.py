@@ -21,6 +21,20 @@ from typing import Protocol
 from osf.model import Objective, WorkItem
 from osf.types import ObjectiveId, RepoRef
 
+ROUTE_SYSTEM = (
+    "You are the driver agent of an autonomous software factory, talking to a user at a prompt. "
+    "Decide what their message is, and reply with JSON only:\n"
+    '{"action": "reply|plan|run", "message": "...", "run": "<name>", "params": {"key": "value"}}\n'
+    "- `reply`: they are talking to you, not asking for work — a greeting, a question about what "
+    "you can do, small talk. Put your answer in `message`, one or two sentences, and offer what "
+    "you could build for them. Never invent a plan for a greeting.\n"
+    "- `run`: their request matches one of the workflows listed below. Name it in `run` and "
+    "prefill `params` with anything they already told you; leave out what they did not say — the "
+    "user will be asked for the rest.\n"
+    "- `plan`: anything else that is actual work to build or change.\n"
+    "When in doubt between reply and plan, prefer reply and ask them what they want built."
+)
+
 CLARIFY_SYSTEM = (
     "You are the driver agent of an autonomous software factory. Before planning, decide what you "
     "genuinely need to know about the user's request.\n"
@@ -130,6 +144,48 @@ class ProposedPlan:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class Decision:
+    """What the driver decided a message was: chat, a workflow to run, or work to plan."""
+
+    action: str  # "reply" | "run" | "plan"
+    message: str = ""
+    run: str = ""
+    params: dict[str, str] = field(default_factory=dict)
+
+
+def route_catalog(runs: Sequence[tuple[str, str, Sequence[str]]]) -> str:
+    """Describe the available workflows so the driver can pick one and prefill it."""
+    if not runs:
+        return "No workflows are available; never choose the run action."
+    lines = [
+        f"- {name}: {description} (params: {', '.join(params) or 'none'})"
+        for name, description, params in runs
+    ]
+    return "Workflows you may run:\n" + "\n".join(lines)
+
+
+def parse_decision(text: str) -> Decision:
+    """Read a routing decision, defaulting to planning when the reply is unusable."""
+    match = _JSON.search(text or "")
+    if not match:
+        return Decision(action="plan")
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return Decision(action="plan")
+    action = str(data.get("action") or "plan").strip().lower()
+    if action not in ("reply", "run", "plan"):
+        action = "plan"
+    params = data.get("params")
+    return Decision(
+        action=action,
+        message=str(data.get("message") or "").strip(),
+        run=str(data.get("run") or "").strip(),
+        params={str(k): str(v) for k, v in params.items()} if isinstance(params, dict) else {},
+    )
+
+
 # One round of the negotiation: what was proposed, and what the user said about it.
 Exchange = tuple[ProposedPlan, str]
 # A clarifying question and what the user said back.
@@ -137,7 +193,9 @@ Answer = tuple[str, str]
 
 
 class Planner(Protocol):
-    """Asks what it needs to know, then proposes a plan and revises it on feedback."""
+    """The driver agent: decides what a message is, asks what it needs, then plans."""
+
+    def route(self, request: str, catalog: str = "") -> Decision: ...
 
     def clarify(self, request: str) -> list[str]: ...
 
@@ -158,6 +216,11 @@ class StaticPlanner:
     like `demo.osf` reads as a filename — and a wrong gate is worse than none, because the run
     fails forever chasing a file that was never meant to exist.
     """
+
+    def route(self, request: str, catalog: str = "") -> Decision:
+        # With no model there is no judgement to apply: treat everything as work to plan, which
+        # is what the shell did before routing existed.
+        return Decision(action="plan")
 
     def clarify(self, request: str) -> list[str]:
         return []  # with no model there is nobody to ask, and nobody to use the answers

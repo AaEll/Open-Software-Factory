@@ -21,14 +21,29 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from osf.config import default_owner, detected_owner, parse_repo, valid_repo_name
+from osf.config import (
+    CONFIG_ENV,
+    default_owner,
+    detected_owner,
+    load_env,
+    parse_repo,
+    valid_repo_name,
+)
 from osf.driver import Driver, ObjectiveOutcome
 from osf.forge import Forge
 from osf.isolation import IsolationBackend
 from osf.local.forge import InMemoryForge, NoForge
 from osf.local.isolation import TempdirIsolation
 from osf.local.project import ProjectIsolation, git_init, repo_root
-from osf.planner import Answer, Exchange, Planner, ProposedPlan, StaticPlanner
+from osf.planner import (
+    Answer,
+    Decision,
+    Exchange,
+    Planner,
+    ProposedPlan,
+    StaticPlanner,
+    route_catalog,
+)
 from osf.prompts import STYLE, Cancelled, Choice, confirm, select, text
 from osf.review import AcceptanceReviewer, PlanReviewer
 from osf.runs import PrepackagedRun, all_runs, execute, get_run
@@ -123,6 +138,8 @@ class Shell:
         where = self.session.project or (repo_root() if self.session.forge == "local" else None)
         target = str(where) if where else f"forge {self.session.forge}"
         self.note(f"{self.session.engine} · {target} · /help for commands")
+        if self.session.model is None:
+            self.note(f"no engine — put FIREWORKS_API_KEY in {CONFIG_ENV} to get a real driver")
         self.say()
         while self.running:
             try:
@@ -145,7 +162,7 @@ class Shell:
 
     def dispatch(self, line: str) -> None:
         if not line.startswith("/"):
-            self.objective(line)
+            self.handle(line)
             return
         name, _, rest = line[1:].partition(" ")
         command = self.commands.get(name)
@@ -153,6 +170,36 @@ class Shell:
             self.error(f"unknown command /{name} — try /help")
             return
         command.handler(self, rest.strip())
+
+    # --- the driver decides what to do with what you typed ----------------------------------
+
+    def handle(self, line: str) -> None:
+        """Let the driver route the message: answer it, start a workflow, or plan the work."""
+        decision = self.route(line)
+        if decision.action == "reply" and decision.message:
+            self.say(f"  {decision.message}")
+            return
+        if decision.action == "run":
+            try:
+                run = get_run(decision.run)
+            except KeyError:
+                self.objective(line)  # it named a workflow that doesn't exist; treat as work
+                return
+            self.note(f"this looks like {run.name}")
+            self.start_run(run, prefill=decision.params)
+            return
+        self.objective(line)
+
+    def route(self, line: str) -> Decision:
+        """Ask the driver what the message is. Anything unusable means "treat it as work"."""
+        catalog = route_catalog(
+            [(run.name, run.description, [p.name for p in run.params]) for run in all_runs()]
+        )
+        try:
+            return self.session.planner().route(line, catalog)
+        except Exception as exc:
+            self.error(f"driver unavailable ({type(exc).__name__}: {exc})")
+            return Decision(action="plan")
 
     # --- free-text objectives -------------------------------------------------------------
 
@@ -296,10 +343,15 @@ class Shell:
 
     # --- prepackaged runs -------------------------------------------------------------------
 
-    def start_run(self, run: PrepackagedRun) -> None:
-        """Walk a run's declared parameters, then execute the plan it builds."""
+    def start_run(self, run: PrepackagedRun, prefill: dict[str, str] | None = None) -> None:
+        """Walk a run's declared parameters, then execute the plan it builds.
+
+        Anything the driver already gathered from the conversation arrives in `prefill` and shows
+        up as the answer's default, so the user confirms rather than retypes it.
+        """
+        prefill = prefill or {}
         self.say(STYLE.bold(f"  {run.name}") + STYLE.dim(f" — {run.description}"))
-        params = {param.name: ask_param(param) for param in run.params}
+        params = {param.name: ask_param(param, prefill.get(param.name, "")) for param in run.params}
         plan = run.build(params)
 
         self.note(f"objective: {plan.objective.goal}")
@@ -360,9 +412,9 @@ class Shell:
             self.note("try /rounds to allow more attempts, /model to use a real engine")
 
 
-def ask_param(param) -> str:
+def ask_param(param, prefill: str = "") -> str:
     """Ask one `RunParam` using the widget its schema implies."""
-    default = param.resolve_default()
+    default = prefill or param.resolve_default()
     if param.choices:
         return select(param.prompt, param.choices, default=default)
     return text(
@@ -527,14 +579,7 @@ def default_session() -> Session:
     has an engine, so use it rather than silently falling back to the scripted worker — planning
     with no model produces a plan that only echoes the request.
     """
-    try:
-        from dotenv import find_dotenv, load_dotenv
-
-        # usecwd: search up from where the user launched `sf`, not from this file — an installed
-        # package would otherwise look beside itself in site-packages and find nothing.
-        load_dotenv(find_dotenv(usecwd=True))
-    except ImportError:
-        pass
+    load_env()
     return Session(model=default_model())
 
 

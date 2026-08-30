@@ -22,9 +22,12 @@ from osf.engines._tools import (
 )
 from osf.planner import (
     CLARIFY_SYSTEM,
+    ROUTE_SYSTEM,
     Answer,
+    Decision,
     Exchange,
     ProposedPlan,
+    parse_decision,
     parse_questions,
     propose_with_retry,
 )
@@ -125,6 +128,10 @@ class ClaudePlanner:
 
     def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
         self._model = model
+
+    def route(self, request: str, catalog: str = "") -> Decision:
+        system = f"{ROUTE_SYSTEM}\n\n{catalog}" if catalog else ROUTE_SYSTEM
+        return parse_decision(self._complete(system, [{"role": "user", "content": request}], 500))
 
     def clarify(self, request: str) -> list[str]:
         reply = self._complete(CLARIFY_SYSTEM, [{"role": "user", "content": request}], 500)

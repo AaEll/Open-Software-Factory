@@ -35,6 +35,12 @@ free text becomes an objective, `/commands` (`/new-repo`, `/run`, `/repo`, `/mod
 (`osf/runs.py`) and the shell walks that schema — add a question to a run, not to the shell.
 `osf/prompts.py` is the dependency-free text/select/confirm toolkit.
 
+**The driver owns the loop.** Free text goes to `Planner.route` first (`ROUTE_SYSTEM`), which
+returns a `Decision`: `reply` (answer the user — a greeting is not a build request), `run` (start a
+prepackaged workflow, prefilling any params it understood, the rest asked as usual), or `plan`.
+Anything unusable, unreachable, or offline falls through to `plan`, so a request is never dropped.
+The run catalog is rendered into the prompt, so the driver can only pick a workflow that exists.
+
 **The definition of done is negotiated, not demanded.** `osf/planner.py` has the driver agent first
 `clarify` (up to 3 questions it writes for that request, answered inline, skippable, `/ask off`),
 then propose a `ProposedPlan` (goal + steps, each step carrying the files it must produce); the shell shows it and

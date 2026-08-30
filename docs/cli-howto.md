@@ -47,10 +47,36 @@ and without them there would be no way to undo a change.
 Not sure the install is sound? `/smoke` drives the whole `objective → worker → PR → merge` pipeline
 offline and reports `smoke: ok`.
 
-## 3. Your first objective
+## 3. Talking to the driver
 
-Anything that isn't a `/command` is a request. The driver plans it, shows you the plan, and does
-nothing until you accept:
+Anything that isn't a `/command` goes to the driver agent, which decides what it is. Not everything
+you type is a build request:
+
+```console
+› hi bot
+  Hi there! I'm the driver agent of an autonomous software factory — I can help you build apps,
+  scaffold repositories, plan features, and much more. What would you like to build today?
+
+› make me a new repository called widgets, blank, no CI
+  this looks like create-repo
+  create-repo — Create and scaffold a new repository for the user.
+? Repository name (widgets) ›
+? Starting point
+    1. Template with CI/CD  README, LICENSE, .gitignore, workflows
+  › 2. Blank repository  README and .gitignore only
+```
+
+Three things can happen: the driver **answers** you, **starts a workflow** — carrying over what you
+already said, so `widgets` and `blank` arrive as the defaults and you just press Enter — or
+**plans the work**. It only ever proposes; nothing runs until you accept.
+
+If the driver is unreachable, or names a workflow that doesn't exist, your message is planned as
+work rather than dropped. Offline there is no judgement to apply, so everything is planned.
+
+## 3.1 Asking for work
+
+A request to build something gets planned. The driver shows the plan and does nothing until you
+accept:
 
 ```console
 › Create a landing page for my dog Pobrecita
