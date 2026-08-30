@@ -1,0 +1,62 @@
+{
+  "id": "chatcmpl-06ec272aa37e4514b1e9b7b300cd7122",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "write_file_0",
+            "function": {
+              "arguments": "{\"path\": \"index.html\", \"content\": \"<!DOCTYPE html>\\n<html lang=\\\"en\\\">\\n<head>\\n  <meta charset=\\\"UTF-8\\\">\\n  <meta name=\\\"viewport\\\" content=\\\"width=device-width, initial-scale=1.0\\\">\\n  <title>Pobrecita the Dog \u2014 Adoptable Cutie</title>\\n  <style>\\n    :root {\\n      --bg: #fff8f0;\\n      --card: #ffffff;\\n      --text: #3e2c22;\\n      --accent: #e6924d;\\n      --accent-dark: #c56a2e;\\n      --muted: #8c7664;\\n      --shadow: rgba(62, 44, 34, 0.12);\\n    }\\n\\n    * { box-sizing: border-box; margin: 0; padding: 0; }\\n\\n    body {\\n      font-family: 'Georgia', 'Times New Roman', serif;\\n      background: var(--bg);\\n      color: var(--text);\\n      line-height: 1.6;\\n    }\\n\\n    header {\\n      text-align: center;\\n      padding: 3rem 1rem 2rem;\\n      background: linear-gradient(180deg, #ffe6d1 0%, var(--bg) 100%);\\n    }\\n\\n    header h1 {\\n      font-size: 2.8rem;\\n      letter-spacing: -0.03em;\\n      margin-bottom: 0.5rem;\\n    }\\n\\n    header p {\\n      font-size: 1.2rem;\\n      color: var(--muted);\\n    }\\n\\n    .container {\\n      max-width: 720px;\\n      margin: 0 auto;\\n      padding: 1rem 1rem 3rem;\\n    }\\n\\n    .hero-card {\\n      background: var(--card);\\n      border-radius: 24px;\\n      box-shadow: 0 12px 40px var(--shadow);\\n      overflow: hidden;\\n      text-align: center;\\n      padding: 2rem 2rem 2.5rem;\\n    }\\n\\n    .paw-print {\\n      width: 140px;\\n      height: 140px;\\n      margin: 0 auto 1.5rem;\\n      background: var(--accent);\\n      border-radius: 50%;\\n      position: relative;\\n      box-shadow: 0 8px 24px rgba(230, 146, 77, 0.35);\\n      display: flex;\\n      align-items: center;\\n      justify-content: center;\\n      font-size: 3.5rem;\\n      animation: gentle-bounce 3s infinite ease-in-out;\\n    }\\n\\n    .paw-print::before,\\n    .paw-print::after {\\n      content: \\\"\\\";\\n      position: absolute;\\n      background: var(--accent);\\n      border-radius: 50%;\\n    }\\n\\n    .paw-print::before {\\n      width: 40px;\\n      height: 40px;\\n      top: -22px;\\n      left: 18px;\\n      box-shadow: 32px 8px 0 var(--accent), 64px 8px 0 var(--accent);\\n    }\\n\\n    .paw-print::after {\\n      width: 34px;\\n      height: 34px;\\n      top: -36px;\\n      left: 53px;\\n    }\\n\\n    .paw-print span {\\n      position: relative;\\n      z-index: 2;\\n      transform: translateY(6px);\\n    }\\n\\n    @keyframes gentle-bounce {\\n      0%, 100% { transform: translateY(0); }\\n      50% { transform: translateY(-8px); }\\n    }\\n\\n    .tagline {\\n      font-size: 1.35rem;\\n      margin-bottom: 1rem;\\n      color: var(--accent-dark);\\n    }\\n\\n    .bio {\\n      color: var(--muted);\\n      max-width: 560px;\\n      margin: 0 auto 1.5rem;\\n      font-size: 1.05rem;\\n    }\\n\\n    .stats {\\n      display: grid;\\n      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));\\n      gap: 1rem;\\n      max-width: 520px;\\n      margin: 0 auto 2rem;\\n    }\\n\\n    .stat {\\n      background: #fff4e9;\\n      border-radius: 16px;\\n      padding: 1rem 0.5rem;\\n    }\\n\\n    .stat strong {\\n      display: block;\\n      font-size: 1.25rem;\\n      color: var(--accent-dark);\\n    }\\n\\n    .stat span {\\n      font-size: 0.9rem;\\n      color: var(--muted);\\n    }\\n\\n    .cta {\\n      display: inline-block;\\n      background: var(--accent-dark);\\n      color: #fff;\\n      text-decoration: none;\\n      padding: 0.9rem 2rem;\\n      border-radius: 999px;\\n      font-size: 1.1rem;\\n      font-weight: bold;\\n      transition: transform 0.2s, background 0.2s;\\n      box-shadow: 0 6px 20px rgba(197, 106, 46, 0.3);\\n    }\\n\\n    .cta:hover {\\n      background: #a55420;\\n      transform: translateY(-2px);\\n    }\\n\\n    .section {\\n      margin-top: 2.5rem;\\n      background: var(--card);\\n      border-radius: 24px;\\n      box-shadow: 0 12px 40px var(--shadow);\\n      padding: 2rem;\\n    }\\n\\n    .section h2 {\\n      font-size: 1.5rem;\\n      margin-bottom: 1rem;\\n      color: var(--accent-dark);\\n    }\\n\\n    .section ul {\\n      list-style: none;\\n    }\\n\\n    .section li {\\n      padding: 0.5rem 0 0.5rem 1.75rem;\\n      position: relative;\\n    }\\n\\n    .section li::before {\\n      content: \\\"\ud83d\udc3e\\\";\\n      position: absolute;\\n      left: 0;\\n    }\\n\\n    .gallery {\\n      display: grid;\\n      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\\n      gap: 1rem;\\n    }\\n\\n    .photo {\\n      aspect-ratio: 1 / 1;\\n      background: #fff4e9;\\n      border-radius: 20px;\\n      display: flex;\\n      align-items: center;\\n      justify-content: center;\\n      font-size: 3rem;\\n      box-shadow: inset 0 0 0 2px rgba(230, 146, 77, 0.2);\\n      transition: transform 0.2s;\\n    }\\n\\n    .photo:hover {\\n      transform: scale(1.03);\\n    }\\n\\n    footer {\\n      text-align: center;\\n      padding: 2.5rem 1rem;\\n      color: var(--muted);\\n      font-size: 0.95rem;\\n    }\\n\\n    @media (max-width: 480px) {\\n      header h1 { font-size: 2.2rem; }\\n      .hero-card { padding: 1.5rem 1rem; }\\n      .section { padding: 1.5rem 1rem; }\\n    }\\n  </style>\\n</head>\\n<body>\\n\\n  <header>\\n    <h1>Pobrecita</h1>\\n    <p>the sweetest little dog in town</p>\\n  </header>\\n\\n  <main class=\\\"container\\\">\\n    <section class=\\\"hero-card\\\">\\n      <div class=\\\"paw-print\\\" aria-hidden=\\\"true\\\">\\n        <span>\ud83d\udc36</span>\\n      </div>\\n      <p class=\\\"tagline\\\">Looking for a loyal friend with a wiggly tail?</p>\\n      <p class=\\\"bio\\\">\\n        Pobrecita is a gentle, loving pup who adores belly rubs, sunny naps, and treats. She is ready to find her forever home and bring endless joy to one lucky family.\\n      </p>\\n      <div class=\\\"stats\\\">\\n        <div class=\\\"stat\\\"><strong>3 yrs</strong><span>Age</span></div>\\n        <div class=\\\"stat\\\"><strong>Small</strong><span>Size</span></div>\\n        <div class=\\\"stat\\\"><strong>Female</strong><span>Gender</span></div>\\n        <div class=\\\"stat\\\"><strong>Super chill</strong><span>Energy</span></div>\\n      </div>\\n      <a class=\\\"cta\\\" href=\\\"mailto:adopt@pobrecita.dog?subject=I%20want%20to%20meet%20Pobrecita!\\\">Meet Pobrecita</a>\\n    </section>\\n\\n    <section class=\\\"section\\\">\\n      <h2>Why you'll love her</h2>\\n      <ul>\\n        <li>Great with kids, cats, and couches</li>\\n        <li>House-trained and leash-ready</li>\\n        <li>Expert-level cuddler</li>\\n        <li>Always happy to see you</li>\\n      </ul>\\n    </section>\\n\\n    <section class=\\\"section\\\">\\n      <h2>Photo gallery</h2>\\n      <div class=\\\"gallery\\\" aria-label=\\\"Pobrecita photo gallery\\\">\\n        <div class=\\\"photo\\\" title=\\\"Pobrecita napping\\\">\ud83d\ude34</div>\\n        <div class=\\\"photo\\\" title=\\\"Pobrecita playing\\\">\ud83c\udfbe</div>\\n        <div class=\\\"photo\\\" title=\\\"Pobrecita on a walk\\\">\ud83d\udc15</div>\\n        <div class=\\\"photo\\\" title=\\\"Pobrecita smiling\\\">\ud83e\udd70</div>\\n      </div>\\n    </section>\\n\\n    <section class=\\\"section\\\">\\n      <h2>Adoption details</h2>\\n      <p style=\\\"color: var(--muted);\\\">\\n        Pobrecita is spayed, vaccinated, and microchipped. She comes with a favorite blanket, a squeaky toy, and a whole lot of love. Contact us to schedule a meet-and-greet.\\n      </p>\\n    </section>\\n  </main>\\n\\n  <footer>\\n    <p>Made with \ud83d\udc3e for Pobrecita</p>\\n  </footer>\\n\\n  <script>\\n    // Simple console greeting to keep the page self-contained\\n    console.log(\\\"\ud83d\udc36 Pobrecita says hi! Thanks for visiting her landing page.\\\");\\n\\n    // Add a tiny interaction: clicking the paw-print gives a fun message\\n    document.querySelector('.paw-print').addEventListener('click', function() {\\n      const messages = [\\n        \\\"Pobrecita wags her tail!\\\",\\n        \\\"Pobrecita wants a treat!\\\",\\n        \\\"Pobrecita gives you a paw!\\\",\\n        \\\"Pobrecita boops your nose!\\\"\\n      ];\\n      const msg = messages[Math.floor(Math.random() * messages.length)];\\n      alert(msg);\\n    });\\n  </script>\\n\\n</body>\\n</html>\\n\"}",
+              "name": "write_file"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "The user wants me to create a self-contained index.html landing page for \"Pobrecita the dog\". I should create a simple, charming, self-contained HTML page with embedded CSS and JS. I'll make it cute and responsive, with a dog theme. Since I don't have actual images, I'll use CSS/SVG/emoji or a placeholder. Keep it simple and self-contained.\n\nI'll write the file using write_file.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1788126345,
+  "model": "accounts/fireworks/models/kimi-k2p7-code",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2732,
+    "prompt_tokens": 168,
+    "total_tokens": 2900,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 85,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "compute_units": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 85
+    }
+  }
+}

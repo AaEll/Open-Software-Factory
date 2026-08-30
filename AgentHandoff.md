@@ -47,6 +47,11 @@ or a Fireworks key, so a user with a key never lands on the scripted planner by 
 `hosts.yml`), never asked for — work is local `git init` until a forge is chosen. There are no flag-driven subcommands; the
 non-interactive gate for CI and the container is the separate `sf-smoke` script.
 
+Engine adapters take an injectable client, and `tests/test_integration.py` replays recorded
+Fireworks responses (`tests/fixtures/fireworks/`) through an httpx mock transport — the full
+clarify → plan → worker → merge path runs in CI with no key and no spend. Re-record with
+`python -m evals.record_fireworks`.
+
 Isolation is tiered (worktree local / container cloud). Dev loop: `pip install -e ".[dev]"` then
 `ruff check .` and `pytest`; real engines need `pip install -e ".[agent]"`.
 

@@ -68,13 +68,27 @@ _TOOLS = [
 ]
 
 
+def make_client(client: object | None = None) -> object:
+    """The OpenAI-compatible client to call Fireworks with.
+
+    An injected client is used as-is, which is how the integration tests replay recorded responses
+    through a mock transport instead of spending credits.
+    """
+    if client is not None:
+        return client
+    from openai import OpenAI  # lazy: keeps the dependency optional
+
+    return OpenAI(base_url=BASE_URL, api_key=require_api_key())
+
+
 class FireworksRuntime:
     """Runs a single worker turn against a Fireworks-hosted model, writing into the workspace."""
 
-    def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
+    def __init__(self, model: ModelRef = DEFAULT_MODEL, *, client: object | None = None) -> None:
         if model.provider_id != "fireworks":
             raise ValueError(f"FireworksRuntime only serves the 'fireworks' provider, got {model}")
         self._model = model
+        self._client = client
         self._sessions: dict[SessionId, Workspace] = {}
         self._results: dict[SessionId, AgentResult] = {}
         self._counter = 0
@@ -100,9 +114,7 @@ class FireworksRuntime:
         return self._results[session]
 
     def _run_loop(self, workspace: Workspace, prompt: str) -> AgentResult:
-        from openai import OpenAI  # lazy: keeps the dependency optional
-
-        client = OpenAI(base_url=BASE_URL, api_key=require_api_key())
+        client = make_client(self._client)
         messages: list[dict] = [
             {"role": "system", "content": WORKER_SYSTEM},
             {"role": "user", "content": prompt},
@@ -142,8 +154,9 @@ class FireworksPlanner:
     workspace — so planning is cheap next to a worker run.
     """
 
-    def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
+    def __init__(self, model: ModelRef = DEFAULT_MODEL, *, client: object | None = None) -> None:
         self._model = model
+        self._client = client
 
     def clarify(self, request: str) -> list[str]:
         reply = self._complete(CLARIFY_SYSTEM, [{"role": "user", "content": request}], 500)
@@ -158,9 +171,7 @@ class FireworksPlanner:
         return propose_with_retry(self._complete, request, exchanges, answers)
 
     def _complete(self, system: str, messages: list[dict], max_tokens: int) -> str:
-        from openai import OpenAI  # lazy: keeps the dependency optional
-
-        client = OpenAI(base_url=BASE_URL, api_key=require_api_key())
+        client = make_client(self._client)
         response = client.chat.completions.create(
             model=self._model.model_id,
             messages=[{"role": "system", "content": system}, *messages],

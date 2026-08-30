@@ -32,6 +32,14 @@ pip install -e ".[agent]"   # real engines (openai, anthropic, python-dotenv)
 python -m evals.efactory_live   # live eval; needs FIREWORKS_API_KEY in .env
 ```
 
+## Tests that touch a model
+
+Never call a live API from the test suite. Engine adapters are covered by replaying recorded
+responses (`tests/fixtures/fireworks/`, see its README) through an httpx mock transport, so CI
+needs no key and costs nothing. Re-record deliberately with `python -m evals.record_fireworks`.
+The offline `osf/local/` stand-ins remain the cheapest smoke path; the fixtures cover the code
+that actually talks to a model, which the stand-ins never exercise.
+
 ## Secrets
 
 Keys live in `.env` (gitignored) — `FIREWORKS_API_KEY` (or `FIREWORKS`). Never commit secrets or the

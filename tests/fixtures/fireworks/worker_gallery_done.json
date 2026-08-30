@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-e291ae56e172429d97d31f6311c6c5fa",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Created `gallery.html` \u2014 a self-contained, responsive photo gallery for Pobrecita with lightbox, keyboard navigation, and lazy loading.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "The file was written successfully. I should provide a brief confirmation.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1788126386,
+  "model": "accounts/fireworks/models/kimi-k2p7-code",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 44,
+    "prompt_tokens": 2632,
+    "total_tokens": 2676,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 13,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "compute_units": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 166,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 13
+    }
+  }
+}
