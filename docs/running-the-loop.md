@@ -3,7 +3,7 @@
 How to start OSF's driver control loop — the autonomous
 `decompose → dispatch worker → open PR → review → merge` reconcile loop.
 
-> The `sf` CLI (below) covers the common cases; anything else you assemble from a few lines of
+> The `sf` shell (below) covers the common cases; anything else you assemble from a few lines of
 > Python. Either way you supply four pieces, all behind swappable contracts:
 >
 > | Piece | What it is | Offline option | Real option |
@@ -15,33 +15,32 @@ How to start OSF's driver control loop — the autonomous
 
 ## 0. The CLI
 
-`pip install -e .` puts an `sf` command on your PATH:
+`pip install -e .` puts `sf` on your PATH. It opens a shell: plain language becomes an objective,
+`/commands` reach the structured flows.
 
-```bash
-sf smoke                      # offline end-to-end pipeline check
-sf runs                       # list the prepackaged runs
-sf objective "Create a landing page for demo.osf" \
-    --repo me/site --criterion "index.html exists"
-sf run create-repo -p name=widgets -p description="A widget library" \
-    --model fireworks/accounts/fireworks/models/kimi-k2p7-code
+```console
+$ sf
+› /repo me/site
+› Create a landing page for demo.osf
+? Acceptance criteria naming files, comma-separated › index.html exists
+  me-site: done
+  me-site-1: merged (PR#1, rounds=1)
 ```
 
-Shared flags on `objective`/`run`:
-
-| Flag | Meaning |
+| Command | Sets |
 |---|---|
-| `--model provider/model` | engine for the workers; omit it for the offline scripted runtime |
-| `--forge memory\|github` | `memory` (default) is a dry run; `github` needs `GITHUB_TOKEN` |
-| `--org` | with `--forge github`, create repos under an organization |
-| `--max-rounds N` | review iterations per WorkItem before escalating (default 3) |
-| `--json` | print the outcome as JSON |
-
-Task-first walkthrough of these commands: [`cli-howto.md`](cli-howto.md).
+| `/model provider/model` | the engine workers run on (default: the offline scripted runtime) |
+| `/forge memory\|github\|github-org` | `memory` (default) is a dry run; `github` needs `GITHUB_TOKEN` |
+| `/rounds N` | review iterations per WorkItem before escalating (default 3) |
+| `/new-repo`, `/run [name]` | start a prepackaged run, question by question |
 
 The reviewer is [`AcceptanceReviewer`](../osf/review.py): it approves once every file named in the
-objective's acceptance criteria exists in the workspace (`--criterion "README.md exists"`). Criteria
-that name no file are informational and never block a merge. Exit status is `0` when the objective
-is `done`, `1` when it escalates.
+objective's acceptance criteria exists in the workspace. Criteria that name no file are
+informational and never block a merge.
+
+Task-first walkthrough: [`cli-howto.md`](cli-howto.md). The rest of this page is the Python API the
+shell is built on — use it when you need something the shell doesn't offer, or automation without a
+TTY.
 
 ## 1. Fastest check — the offline smoke
 

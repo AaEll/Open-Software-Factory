@@ -29,9 +29,13 @@ into `eval/<repo-name>/` and grades it — verified passing 4/4 on
 `fireworks/accounts/fireworks/models/kimi-k2p7-code`. Secrets in `.env` (gitignored):
 `FIREWORKS_API_KEY` (or `FIREWORKS`); override model with `OSF_MODEL`.
 
-The `sf` CLI (`osf/cli.py`) drives all of this from the shell — `sf smoke`, `sf runs`,
-`sf run <name>`, `sf objective <goal> --repo owner/name` — with `--model`/`--forge` choosing the
-engine and forge, and `osf/review.py`'s `AcceptanceReviewer` as the default definition of done.
+The `sf` CLI (`osf/cli.py` → `osf/shell.py`) is an interactive shell, the only user entry point:
+free text becomes an objective, `/commands` (`/new-repo`, `/run`, `/repo`, `/model`, `/forge`,
+`/rounds`) reach the structured flows. Prepackaged runs declare their questions as `RunParam`s
+(`osf/runs.py`) and the shell walks that schema — add a question to a run, not to the shell.
+`osf/prompts.py` is the dependency-free text/select/confirm toolkit; `osf/review.py`'s
+`AcceptanceReviewer` is the default definition of done. There are no flag-driven subcommands; the
+non-interactive gate for CI and the container is the separate `sf-smoke` script.
 
 Isolation is tiered (worktree local / container cloud). Dev loop: `pip install -e ".[dev]"` then
 `ruff check .` and `pytest`; real engines need `pip install -e ".[agent]"`.

@@ -19,7 +19,8 @@ from osf.orchestrator import run_objective
 from osf.types import RepoRef
 
 
-async def _run() -> bool:
+async def run_smoke() -> bool:
+    """The smoke as a coroutine, so the `sf` shell's /smoke can reuse it."""
     objective = Objective(
         id="smoke",
         repo=RepoRef(owner="osf", name="smoke"),
@@ -37,7 +38,7 @@ async def _run() -> bool:
 
 
 def main() -> None:
-    ok = asyncio.run(_run())
+    ok = asyncio.run(run_smoke())
     print("sf smoke:", "ok" if ok else "FAILED")
     raise SystemExit(0 if ok else 1)
 

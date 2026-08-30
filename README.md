@@ -32,22 +32,25 @@ pytest
 
 ## Run the agent loop
 
-Start the driver control loop (`decompose → dispatch worker → open PR → review → merge`) with the
-`sf` CLI — offline (no keys), with a real engine (Fireworks), or against real GitHub:
+`sf` opens a dialog with the driver. Type a goal in plain language and it becomes an objective the
+factory reconciles (`decompose → dispatch worker → open PR → review → merge`); use `/commands` for
+the structured workflows:
 
-```bash
-pip install -e .
-sf smoke                      # offline end-to-end pipeline check
-sf runs                       # list the prepackaged runs
-sf objective "Create a landing page for demo.osf" \
-    --repo me/site --criterion "index.html exists"
-sf run create-repo -p name=widgets --model fireworks/accounts/fireworks/models/kimi-k2p7-code
+```console
+$ sf
+Open Software Factory
+  offline (scripted worker) · forge memory · /help for commands
+
+› /new-repo
+? Repository name › widgets
+? Starting point
+  › 1. Template with CI/CD  README, LICENSE, .gitignore, workflows
+    2. Blank repository  README and .gitignore only
 ```
 
-Add `--forge github` (with `GITHUB_TOKEN`) to work against real repositories; omit `--model` to use
-the offline scripted worker. Step-by-step, install through creating a new repository:
-[`docs/cli-howto.md`](docs/cli-howto.md). Driving the loop from Python:
-[`docs/running-the-loop.md`](docs/running-the-loop.md).
+`/model provider/model` picks a real engine, `/forge github` works against real repositories, and
+`/status` shows the session. Step-by-step: [`docs/cli-howto.md`](docs/cli-howto.md). Driving the
+loop from Python instead: [`docs/running-the-loop.md`](docs/running-the-loop.md).
 
 ## Eval
 
