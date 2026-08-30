@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator, Sequence
 
 from osf.engines._tools import (
@@ -20,7 +21,14 @@ from osf.engines._tools import (
     WRITE_TOOL_PARAMETERS,
     apply_write,
 )
-from osf.planner import PLAN_SYSTEM, Exchange, ProposedPlan, build_messages, parse_plan
+from osf.planner import (
+    CLARIFY_SYSTEM,
+    Answer,
+    Exchange,
+    ProposedPlan,
+    parse_questions,
+    propose_with_retry,
+)
 from osf.runtime import AgentEvent, AgentResult
 from osf.types import ModelRef, SessionId, Workspace
 
@@ -30,6 +38,23 @@ DEFAULT_MODEL = ModelRef(
     provider_id="fireworks", model_id="accounts/fireworks/models/kimi-k2p7-code"
 )
 _MAX_STEPS = 12
+_KEY_VARS = ("FIREWORKS_API_KEY", "FIREWORKS")
+
+
+def api_key() -> str | None:
+    """The Fireworks key, if the environment (or a loaded `.env`) has one."""
+    for var in _KEY_VARS:
+        value = os.environ.get(var, "").strip()
+        if value:
+            return value
+    return None
+
+
+def require_api_key() -> str:
+    key = api_key()
+    if not key:
+        raise RuntimeError("set FIREWORKS_API_KEY (or FIREWORKS) in the environment or .env")
+    return key
 
 _TOOLS = [
     {
@@ -75,14 +100,9 @@ class FireworksRuntime:
         return self._results[session]
 
     def _run_loop(self, workspace: Workspace, prompt: str) -> AgentResult:
-        import os
-
         from openai import OpenAI  # lazy: keeps the dependency optional
 
-        api_key = os.environ.get("FIREWORKS_API_KEY") or os.environ.get("FIREWORKS")
-        if not api_key:
-            raise RuntimeError("set FIREWORKS_API_KEY (or FIREWORKS) in the environment or .env")
-        client = OpenAI(base_url=BASE_URL, api_key=api_key)
+        client = OpenAI(base_url=BASE_URL, api_key=require_api_key())
         messages: list[dict] = [
             {"role": "system", "content": WORKER_SYSTEM},
             {"role": "user", "content": prompt},
@@ -116,23 +136,34 @@ class FireworksRuntime:
 
 
 class FireworksPlanner:
-    """Proposes plans with the same model, as a plain completion — no tools, no workspace."""
+    """The driver agent: asks what it needs to know, then plans.
+
+    Both are plain completions against the same Fireworks model the workers use — no tools, no
+    workspace — so planning is cheap next to a worker run.
+    """
 
     def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
         self._model = model
 
-    def propose(self, request: str, exchanges: Sequence[Exchange] = ()) -> ProposedPlan:
-        import os
+    def clarify(self, request: str) -> list[str]:
+        reply = self._complete(CLARIFY_SYSTEM, [{"role": "user", "content": request}], 500)
+        return parse_questions(reply)
 
+    def propose(
+        self,
+        request: str,
+        exchanges: Sequence[Exchange] = (),
+        answers: Sequence[Answer] = (),
+    ) -> ProposedPlan:
+        return propose_with_retry(self._complete, request, exchanges, answers)
+
+    def _complete(self, system: str, messages: list[dict], max_tokens: int) -> str:
         from openai import OpenAI  # lazy: keeps the dependency optional
 
-        api_key = os.environ.get("FIREWORKS_API_KEY") or os.environ.get("FIREWORKS")
-        if not api_key:
-            raise RuntimeError("set FIREWORKS_API_KEY (or FIREWORKS) in the environment or .env")
-        client = OpenAI(base_url=BASE_URL, api_key=api_key)
-        messages = [{"role": "system", "content": PLAN_SYSTEM}]
-        messages.extend(build_messages(request, exchanges))
+        client = OpenAI(base_url=BASE_URL, api_key=require_api_key())
         response = client.chat.completions.create(
-            model=self._model.model_id, messages=messages, max_tokens=2000
+            model=self._model.model_id,
+            messages=[{"role": "system", "content": system}, *messages],
+            max_tokens=max_tokens,
         )
-        return parse_plan(response.choices[0].message.content or "", fallback_goal=request)
+        return response.choices[0].message.content or ""

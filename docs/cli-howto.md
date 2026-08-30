@@ -51,6 +51,10 @@ nothing until you accept:
 › Create a landing page for my dog Pobrecita
 ? Repository name › pobrecita
   repo: AaEll/pobrecita
+  a few questions before I plan (Enter to skip any):
+? What is the main purpose: playful profile, memorial, adoption page? › playful profile
+? What sections must be included (bio, photos, stats, contact)? › bio and photos
+? What tone should the page have (cute, elegant, humorous)? › playful
   planning…
   plan  Build a charming single-page landing site for Pobrecita the dog.
     1. Create a responsive landing page with a hero section, a short bio and a photo gallery
@@ -59,6 +63,11 @@ nothing until you accept:
   AaEll-pobrecita: done
   AaEll-pobrecita-1: merged (PR#1, rounds=1)
 ```
+
+**The driver asks before it plans.** Those questions are written by the driver agent for *your*
+request — not a fixed form — and your answers go into the plan it proposes. Press Enter to skip any
+of them; skip them all and it plans from the request alone. `/ask off` turns the interview off for
+the session.
 
 **You never have to write a merge gate.** The `→ files` on each step *are* the definition of done:
 the PR for that step cannot merge until those files exist. The driver proposes them from your
@@ -94,22 +103,33 @@ forge. Typing `owner/name` at the name question still works if you want to be ex
 Answers are checked as you give them: an unusable name is explained and asked again, in place. A
 typo never costs you the request you just typed.
 
-### Offline versus a real engine
+### The engine
 
-With no engine set, the planner takes your request at face value — one step, no file gate — and the
-scripted worker only ever writes `index.html`. That's enough to watch the loop work, not to build
-anything. Point it at a real model to get real plans:
+`sf` picks up an engine at startup, so there is usually nothing to set: `OSF_MODEL` if you set one,
+otherwise Fireworks whenever a `FIREWORKS_API_KEY` (or `FIREWORKS`) is in your environment or a
+`.env` in the directory you launched from. The banner tells you which engine you got.
+
+```console
+$ sf
+Open Software Factory
+  fireworks/accounts/fireworks/models/kimi-k2p7-code · forge memory · /help for commands
+```
+
+With no key — or without the `agent` extra installed — it says `offline (scripted worker)` instead.
+Offline there is no driver to plan with: the planner echoes your request back as a single step with
+no gate, and the scripted worker only ever writes `index.html`. That's enough to watch the loop
+work, not to build anything. `/model provider/model` switches engines mid-session and `/model off`
+returns to the scripted worker.
 
 ```console
 › /model fireworks/accounts/fireworks/models/kimi-k2p7-code
   engine: fireworks/accounts/fireworks/models/kimi-k2p7-code
 ```
 
-Keys are read from the environment or a `.env` in the directory you launched `sf` from
-(`cp .env.example .env`, then set `FIREWORKS_API_KEY`; `FIREWORKS` also works). Setting `OSF_MODEL`
-there selects the engine at startup. `/model off` returns to the offline worker. If planning fails
-— no key, provider down — the shell says so and falls back to your request as written rather than
-dropping it.
+Planning is a plain completion against the same model the workers use — no tools, no workspace — so
+it costs a fraction of a worker run. If a reply comes back unusable the driver is nudged once to
+retry; if planning fails outright (no key, provider down) the shell says so and falls back to your
+request as written rather than dropping it.
 
 ## 4. Create a new repository
 
@@ -171,6 +191,7 @@ you're done. (The outcome does not yet print this path — see the gaps below.)
 | `/model [provider/model\|off]` | set the engine workers run on |
 | `/forge [memory\|github\|github-org]` | where PRs are opened |
 | `/rounds [n]` | review rounds before a WorkItem escalates (default 3) |
+| `/ask [on\|off]` | whether the driver asks clarifying questions before planning (default on) |
 | `/status` | show all of the above |
 | `/smoke` | offline pipeline self-check |
 | `/quit` (`/exit`, Ctrl-D) | leave |
@@ -224,7 +245,8 @@ Python — see [`running-the-loop.md`](running-the-loop.md).
 | Symptom | Cause |
 |---|---|
 | `sf: command not found` | `pip install -e .` ran in a different environment than your shell's `python` |
-| `set FIREWORKS_API_KEY (or FIREWORKS) ...` | no key in the environment, or you launched `sf` from a directory above your `.env` |
+| banner says `offline (scripted worker)` | no `FIREWORKS_API_KEY`/`FIREWORKS` found, or the `agent` extra isn't installed |
+| `set FIREWORKS_API_KEY (or FIREWORKS) ...` | no key in the environment, and no `.env` at or above the directory you launched `sf` from |
 | `ModuleNotFoundError: No module named 'openai'` | `/model` without the `agent` extra |
 | `set GITHUB_TOKEN or GH_TOKEN for GitHubForge` | `/forge github` without a token |
 | `no engine adapter for provider 'x'` | `/model` provider is not `fireworks` or `anthropic` |

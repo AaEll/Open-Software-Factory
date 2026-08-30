@@ -20,7 +20,14 @@ from osf.engines._tools import (
     WRITE_TOOL_PARAMETERS,
     apply_write,
 )
-from osf.planner import PLAN_SYSTEM, Exchange, ProposedPlan, build_messages, parse_plan
+from osf.planner import (
+    CLARIFY_SYSTEM,
+    Answer,
+    Exchange,
+    ProposedPlan,
+    parse_questions,
+    propose_with_retry,
+)
 from osf.runtime import AgentEvent, AgentResult
 from osf.types import ModelRef, SessionId, Workspace
 
@@ -119,14 +126,25 @@ class ClaudePlanner:
     def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
         self._model = model
 
-    def propose(self, request: str, exchanges: Sequence[Exchange] = ()) -> ProposedPlan:
+    def clarify(self, request: str) -> list[str]:
+        reply = self._complete(CLARIFY_SYSTEM, [{"role": "user", "content": request}], 500)
+        return parse_questions(reply)
+
+    def propose(
+        self,
+        request: str,
+        exchanges: Sequence[Exchange] = (),
+        answers: Sequence[Answer] = (),
+    ) -> ProposedPlan:
+        return propose_with_retry(self._complete, request, exchanges, answers)
+
+    def _complete(self, system: str, messages: list[dict], max_tokens: int) -> str:
         import anthropic  # lazy: keeps the dependency optional
 
         response = anthropic.Anthropic().messages.create(
             model=self._model.model_id,
-            max_tokens=2000,
-            system=PLAN_SYSTEM,
-            messages=build_messages(request, exchanges),
+            max_tokens=max_tokens,
+            system=system,
+            messages=messages,
         )
-        text = "".join(block.text for block in response.content if block.type == "text")
-        return parse_plan(text, fallback_goal=request)
+        return "".join(block.text for block in response.content if block.type == "text")

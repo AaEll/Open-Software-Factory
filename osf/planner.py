@@ -14,12 +14,22 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from osf.model import Objective, WorkItem
 from osf.types import ObjectiveId, RepoRef
+
+CLARIFY_SYSTEM = (
+    "You are the driver agent of an autonomous software factory. Before planning, decide what you "
+    "genuinely need to know about the user's request.\n"
+    'Reply with JSON only, no prose: {"questions": ["...", "..."]}\n'
+    "Rules: at most 3 questions, each one short and answerable in a few words. Ask only what would "
+    "change the plan — scope, must-have content, constraints. Never ask what you can reasonably "
+    "assume or decide yourself, and never ask about tooling, hosting, or the repository. If the "
+    "request is already clear enough to plan, return an empty list."
+)
 
 PLAN_SYSTEM = (
     "You are the driver agent of an autonomous software factory. Turn the user's request into a "
@@ -34,7 +44,15 @@ PLAN_SYSTEM = (
     "If the user gives feedback on a plan, return the whole revised plan, not a diff."
 )
 
+RETRY_NUDGE = (
+    "That reply was not usable. Reply with JSON only — no prose, no code fences — in exactly the "
+    "shape described."
+)
+
 _JSON = re.compile(r"\{.*\}", re.DOTALL)
+
+# How an engine adapter runs one completion: (system prompt, messages, max tokens) -> reply text.
+Complete = Callable[[str, list[dict], int], str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,12 +113,21 @@ class ProposedPlan:
 
 # One round of the negotiation: what was proposed, and what the user said about it.
 Exchange = tuple[ProposedPlan, str]
+# A clarifying question and what the user said back.
+Answer = tuple[str, str]
 
 
 class Planner(Protocol):
-    """Proposes a plan for a request, revising it in light of the user's feedback."""
+    """Asks what it needs to know, then proposes a plan and revises it on feedback."""
 
-    def propose(self, request: str, exchanges: Sequence[Exchange] = ()) -> ProposedPlan: ...
+    def clarify(self, request: str) -> list[str]: ...
+
+    def propose(
+        self,
+        request: str,
+        exchanges: Sequence[Exchange] = (),
+        answers: Sequence[Answer] = (),
+    ) -> ProposedPlan: ...
 
 
 class StaticPlanner:
@@ -111,20 +138,52 @@ class StaticPlanner:
     fails forever chasing a file that was never meant to exist.
     """
 
-    def propose(self, request: str, exchanges: Sequence[Exchange] = ()) -> ProposedPlan:
+    def clarify(self, request: str) -> list[str]:
+        return []  # with no model there is nobody to ask, and nobody to use the answers
+
+    def propose(
+        self,
+        request: str,
+        exchanges: Sequence[Exchange] = (),
+        answers: Sequence[Answer] = (),
+    ) -> ProposedPlan:
+        # Answers are deliberately dropped: with no model to interpret them, folding them into the
+        # spec would just paste an interview transcript in as the work to do.
         steps = [Step(request)]
         for _plan, feedback in exchanges:
             steps.append(Step(feedback))
         return ProposedPlan(goal=request, steps=steps)
 
 
-def build_messages(request: str, exchanges: Sequence[Exchange]) -> list[dict[str, str]]:
+def compose_request(request: str, answers: Sequence[Answer] = ()) -> str:
+    """Fold the answers to the driver's questions into the request it plans from."""
+    if not answers:
+        return request
+    lines = "\n".join(f"- {question} {answer}" for question, answer in answers)
+    return f"{request}\n\nAnswers to your questions:\n{lines}"
+
+
+def build_messages(
+    request: str, exchanges: Sequence[Exchange], answers: Sequence[Answer] = ()
+) -> list[dict[str, str]]:
     """Render the negotiation as a chat transcript the engines can replay."""
-    messages = [{"role": "user", "content": request}]
+    messages = [{"role": "user", "content": compose_request(request, answers)}]
     for plan, feedback in exchanges:
         messages.append({"role": "assistant", "content": render_json(plan)})
         messages.append({"role": "user", "content": feedback})
     return messages
+
+
+def parse_questions(text: str) -> list[str]:
+    """Read the driver's questions out of a model reply; no questions is a valid answer."""
+    match = _JSON.search(text or "")
+    if not match:
+        return []
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return []
+    return [str(q).strip() for q in data.get("questions") or [] if str(q).strip()][:3]
 
 
 def render_json(plan: ProposedPlan) -> str:
@@ -162,3 +221,32 @@ def _strings(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def propose_with_retry(
+    complete: Complete,
+    request: str,
+    exchanges: Sequence[Exchange] = (),
+    answers: Sequence[Answer] = (),
+    *,
+    attempts: int = 2,
+) -> ProposedPlan:
+    """Ask an engine for a plan, nudging it once if the reply isn't a usable plan.
+
+    Models drift out of JSON now and then — a stray sentence, a truncated object. One corrective
+    round trip recovers nearly all of it, and is far cheaper than dropping the user's request.
+    """
+    messages = build_messages(request, exchanges, answers)
+    last: ValueError | None = None
+    for _attempt in range(attempts):
+        reply = complete(PLAN_SYSTEM, messages, 2000)
+        try:
+            return parse_plan(reply, fallback_goal=request)
+        except ValueError as exc:
+            last = exc
+            messages = [
+                *messages,
+                {"role": "assistant", "content": reply},
+                {"role": "user", "content": RETRY_NUDGE},
+            ]
+    raise last if last else ValueError("the planner did not return a plan")

@@ -5,7 +5,16 @@ import asyncio
 import pytest
 
 from osf.model import WorkItem
-from osf.planner import ProposedPlan, StaticPlanner, Step, parse_plan, render_json
+from osf.planner import (
+    PLAN_SYSTEM,
+    ProposedPlan,
+    StaticPlanner,
+    Step,
+    parse_plan,
+    parse_questions,
+    propose_with_retry,
+    render_json,
+)
 from osf.review import PlanReviewer
 from osf.types import RepoRef, Workspace
 
@@ -105,6 +114,71 @@ def test_parse_plan_rejects_unusable_replies(reply):
 def test_render_json_round_trips():
     plan = ProposedPlan("g", [Step("a", ["index.html"])])
     assert parse_plan(render_json(plan), fallback_goal="x") == plan
+
+
+# --- clarifying questions ---------------------------------------------------------------------
+
+
+def test_parse_questions_caps_the_list_at_three():
+    reply = '{"questions": ["a", "b", "c", "d"]}'
+    assert parse_questions(reply) == ["a", "b", "c"]
+
+
+@pytest.mark.parametrize("reply", ["", "no json", '{"questions": []}', "{bad json}"])
+def test_parse_questions_treats_anything_unusable_as_no_questions(reply):
+    # An unparseable reply must not block planning — the driver simply asks nothing.
+    assert parse_questions(reply) == []
+
+
+def test_static_planner_asks_nothing_and_ignores_answers():
+    planner = StaticPlanner()
+    assert planner.clarify("Build a site") == []
+    # With no model to interpret them, answers must not be pasted into the spec as work to do.
+    plan = planner.propose("Build a site", (), [("What vibe?", "playful")])
+    assert plan.steps == [Step("Build a site")]
+
+
+# --- retrying an unusable plan -------------------------------------------------------------
+
+
+def test_propose_retries_once_when_the_reply_is_not_a_plan():
+    replies = ["Sure, I can help with that!", '{"goal": "g", "steps": ["a"]}']
+    seen = []
+
+    def complete(system, messages, max_tokens):
+        seen.append(messages)
+        return replies.pop(0)
+
+    plan = propose_with_retry(complete, "Build a site")
+    assert plan.goal == "g"
+    # the second attempt shows the model its bad reply and asks again
+    assert seen[1][-2]["content"] == "Sure, I can help with that!"
+    assert "JSON only" in seen[1][-1]["content"]
+
+
+def test_propose_gives_up_after_the_retry():
+    def complete(system, messages, max_tokens):
+        return "still not json"
+
+    with pytest.raises(ValueError):
+        propose_with_retry(complete, "Build a site")
+
+
+def test_propose_passes_the_plan_system_prompt():
+    def complete(system, messages, max_tokens):
+        assert system is PLAN_SYSTEM
+        return '{"goal": "g", "steps": ["a"]}'
+
+    assert propose_with_retry(complete, "Build a site").goal == "g"
+
+
+def test_answers_reach_the_model_as_context():
+    def complete(system, messages, max_tokens):
+        assert "playful" in messages[0]["content"]
+        assert "What vibe?" in messages[0]["content"]
+        return '{"goal": "g", "steps": ["a"]}'
+
+    propose_with_retry(complete, "Build a site", (), [("What vibe?", "playful")])
 
 
 # --- the reviewer that uses those gates ---------------------------------------------------------

@@ -30,15 +30,16 @@ $ sf
   me-site-1: merged (PR#1, rounds=1)
 ```
 
-The driver proposes the plan and the files that define "done"; you accept it or say what to change.
-`osf.planner` holds that seam — `StaticPlanner` offline, `osf.engines.resolve_planner` for a real
-model.
+The driver asks its own clarifying questions, proposes the plan and the files that define "done",
+and revises on feedback; you accept it or say what to change. `osf.planner` holds that seam —
+`StaticPlanner` offline, `osf.engines.resolve_planner` for a real model.
 
 | Command | Sets |
 |---|---|
-| `/model provider/model` | the engine workers run on (default: the offline scripted runtime) |
+| `/model provider/model` | the engine workers run on (default: Fireworks if a key is present, else the offline scripted runtime) |
 | `/forge memory\|github\|github-org` | `memory` (default) is a dry run; `github` needs `GITHUB_TOKEN` |
 | `/rounds N` | review iterations per WorkItem before escalating (default 3) |
+| `/ask on\|off` | whether the driver asks clarifying questions before planning |
 | `/repo name` or `/repo owner/name` | the target repository (a bare name uses your account) |
 | `/new-repo`, `/run [name]` | start a prepackaged run, question by question |
 

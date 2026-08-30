@@ -35,12 +35,15 @@ free text becomes an objective, `/commands` (`/new-repo`, `/run`, `/repo`, `/mod
 (`osf/runs.py`) and the shell walks that schema — add a question to a run, not to the shell.
 `osf/prompts.py` is the dependency-free text/select/confirm toolkit.
 
-**The definition of done is negotiated, not demanded.** `osf/planner.py` has the driver propose a
-`ProposedPlan` (goal + steps, each step carrying the files it must produce); the shell shows it and
+**The definition of done is negotiated, not demanded.** `osf/planner.py` has the driver agent first
+`clarify` (up to 3 questions it writes for that request, answered inline, skippable, `/ask off`),
+then propose a `ProposedPlan` (goal + steps, each step carrying the files it must produce); the shell shows it and
 folds plain-language feedback back into a re-plan until the user accepts. Those per-step files
 become the acceptance criteria `osf/review.py`'s `PlanReviewer`/`AcceptanceReviewer` enforce. Engine
-planners resolve like runtimes (`osf.engines.resolve_planner`); `StaticPlanner` is the offline
-reference and deliberately gates on nothing. The forge account is detected (env, then `gh`'s
+planners resolve like runtimes (`osf.engines.resolve_planner`) and are plain completions against
+the worker's model, retried once when a reply isn't parseable; `StaticPlanner` is the offline
+reference and deliberately gates on nothing. The shell picks its engine at startup from `OSF_MODEL`
+or a Fireworks key, so a user with a key never lands on the scripted planner by accident. The forge account is detected (env, then `gh`'s
 `hosts.yml`), never asked for — work is local `git init` until a forge is chosen. There are no flag-driven subcommands; the
 non-interactive gate for CI and the container is the separate `sf-smoke` script.
 

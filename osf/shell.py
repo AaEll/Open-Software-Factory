@@ -15,6 +15,7 @@ commands drives it identically (which is how the tests run).
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ from osf.driver import Driver, ObjectiveOutcome
 from osf.forge import Forge
 from osf.local.forge import InMemoryForge
 from osf.local.isolation import TempdirIsolation
-from osf.planner import Exchange, Planner, ProposedPlan, StaticPlanner
+from osf.planner import Answer, Exchange, Planner, ProposedPlan, StaticPlanner
 from osf.prompts import STYLE, Cancelled, Choice, confirm, select, text
 from osf.review import AcceptanceReviewer, PlanReviewer
 from osf.runs import PrepackagedRun, all_runs, execute, get_run
@@ -42,6 +43,7 @@ class Session:
     model: ModelRef | None = None  # None -> the offline scripted worker
     forge: str = "memory"  # "memory" | "github" | "github-org"
     max_rounds: int = 3
+    ask: bool = True  # let the driver ask clarifying questions before planning
 
     @property
     def engine(self) -> str:
@@ -162,10 +164,11 @@ class Shell:
         self._report(asyncio.run(driver.run(objective)))
 
     def negotiate(self, request: str) -> ProposedPlan | None:
-        """Show the driver's plan and revise it until the user accepts — or declines."""
+        """Let the driver ask what it needs, then revise its plan until the user accepts."""
+        answers = self.interview(request) if self.session.ask else []
         exchanges: list[Exchange] = []
         while True:
-            plan = self.propose(request, exchanges)
+            plan = self.propose(request, exchanges, answers)
             self._show_plan(plan)
             answer = text(
                 "Run this? (Enter to accept, or say what to change)", required=False
@@ -176,15 +179,30 @@ class Shell:
                 return None
             exchanges.append((plan, answer))
 
-    def propose(self, request: str, exchanges: list[Exchange]) -> ProposedPlan:
+    def interview(self, request: str) -> list[Answer]:
+        """Put the driver's own questions to the user. Blank answers are simply skipped."""
+        try:
+            questions = self.session.planner().clarify(request)
+        except Exception as exc:
+            self.error(f"driver unavailable ({type(exc).__name__}: {exc})")
+            return []
+        if not questions:
+            return []
+        self.note("a few questions before I plan (Enter to skip any):")
+        answers = [(question, text(question, required=False)) for question in questions]
+        return [(question, answer) for question, answer in answers if answer]
+
+    def propose(
+        self, request: str, exchanges: list[Exchange], answers: list[Answer]
+    ) -> ProposedPlan:
         """Ask the planner for a plan, falling back to the literal request if it can't."""
         self.note("planning…")
         try:
-            return self.session.planner().propose(request, exchanges)
+            return self.session.planner().propose(request, exchanges, answers)
         except Exception as exc:
             self.error(f"planner unavailable ({type(exc).__name__}: {exc})")
             self.note("falling back to the request as written")
-            return StaticPlanner().propose(request, exchanges)
+            return StaticPlanner().propose(request, exchanges, answers)
 
     def _show_plan(self, plan: ProposedPlan) -> None:
         self.say(f"  {STYLE.bold('plan')}  {plan.goal}")
@@ -325,12 +343,22 @@ def _cmd_rounds(shell: Shell, rest: str) -> None:
     shell.note(f"rounds: {shell.session.max_rounds}")
 
 
+def _cmd_ask(shell: Shell, rest: str) -> None:
+    if rest:
+        if rest not in ("on", "off"):
+            shell.error("ask must be on or off")
+            return
+        shell.session.ask = rest == "on"
+    shell.note(f"clarifying questions: {'on' if shell.session.ask else 'off'}")
+
+
 def _cmd_status(shell: Shell, _rest: str) -> None:
     session = shell.session
     shell.note(f"repo:   {_repo_str(session.repo)}")
     shell.note(f"engine: {session.engine}")
     shell.note(f"forge:  {session.forge}")
     shell.note(f"rounds: {session.max_rounds}")
+    shell.note(f"ask:    {'on' if session.ask else 'off'}")
 
 
 def _cmd_smoke(shell: Shell, _rest: str) -> None:
@@ -357,6 +385,7 @@ _COMMANDS = (
     Command("model", "[provider/model|off]", "set the engine workers run on", _cmd_model),
     Command("forge", "[memory|github|github-org]", "where PRs are opened", _cmd_forge),
     Command("rounds", "[n]", "review rounds before escalating", _cmd_rounds),
+    Command("ask", "[on|off]", "let the driver ask before planning", _cmd_ask),
     Command("status", "", "show the session settings", _cmd_status),
     Command("smoke", "", "run the offline pipeline self-check", _cmd_smoke),
     Command("quit", "", "leave the shell", _cmd_quit),
@@ -370,12 +399,30 @@ _DECLINE = frozenset({"n", "no", "cancel", "stop", "abort"})
 
 
 def default_session() -> Session:
-    """Seed the session from the environment: `.env` keys and an optional `OSF_MODEL`."""
-    try:
-        from dotenv import load_dotenv
+    """Seed the session from the environment.
 
-        load_dotenv()
+    `OSF_MODEL` wins; failing that, a Fireworks key in the environment (or `.env`) means the user
+    has an engine, so use it rather than silently falling back to the scripted worker — planning
+    with no model produces a plan that only echoes the request.
+    """
+    try:
+        from dotenv import find_dotenv, load_dotenv
+
+        # usecwd: search up from where the user launched `sf`, not from this file — an installed
+        # package would otherwise look beside itself in site-packages and find nothing.
+        load_dotenv(find_dotenv(usecwd=True))
     except ImportError:
         pass
-    model = os.environ.get("OSF_MODEL")
-    return Session(model=ModelRef.parse(model) if model else None)
+    return Session(model=default_model())
+
+
+def default_model() -> ModelRef | None:
+    """`OSF_MODEL`, else Fireworks when its key and SDK are both available, else offline."""
+    configured = os.environ.get("OSF_MODEL", "").strip()
+    if configured:
+        return ModelRef.parse(configured)
+    if importlib.util.find_spec("openai") is None:
+        return None  # key or not, without the `agent` extra there is no engine to run
+    from osf.engines.fireworks import DEFAULT_MODEL, api_key
+
+    return DEFAULT_MODEL if api_key() else None

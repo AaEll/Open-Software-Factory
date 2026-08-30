@@ -169,16 +169,22 @@ def test_a_rejected_answer_is_re_asked_without_losing_the_objective(capsys):
 # --- plan negotiation ---------------------------------------------------------------------------
 
 
-def _plan(monkeypatch, *plans):
-    """Pin the session's planner to a scripted sequence of proposals."""
+def _plan(monkeypatch, *plans, questions=()):
+    """Pin the session's planner to scripted questions and a sequence of proposals."""
     remaining = list(plans)
+    last = plans[-1]
 
     class _Scripted:
-        def propose(self, request, exchanges=()):
-            return remaining.pop(0) if remaining else remaining_last
+        def clarify(self, request):
+            return list(questions)
 
-    remaining_last = plans[-1]
+        def propose(self, request, exchanges=(), answers=()):
+            self.answers = list(answers)
+            _Scripted.seen = self.answers
+            return remaining.pop(0) if remaining else last
+
     monkeypatch.setattr(Session, "planner", lambda _self: _Scripted())
+    return _Scripted
 
 
 def test_the_plan_is_shown_before_anything_runs(capsys, monkeypatch):
@@ -212,7 +218,10 @@ def test_declining_the_plan_runs_nothing(capsys, monkeypatch):
 
 def test_a_planner_failure_falls_back_to_the_request(capsys, monkeypatch):
     class _Broken:
-        def propose(self, request, exchanges=()):
+        def clarify(self, request):
+            return []
+
+        def propose(self, request, exchanges=(), answers=()):
             raise RuntimeError("no API key")
 
     monkeypatch.setattr(Session, "planner", lambda _self: _Broken())
@@ -220,6 +229,42 @@ def test_a_planner_failure_falls_back_to_the_request(capsys, monkeypatch):
     assert "planner unavailable" in out
     assert "falling back to the request as written" in out
     assert "me-site: done" in out  # still ran, ungated
+
+
+def test_the_driver_asks_its_own_questions_first(capsys, monkeypatch):
+    scripted = _plan(
+        monkeypatch,
+        ProposedPlan("A playful dog site", [Step("Write index.html", ["index.html"])]),
+        questions=["What vibe?", "Photos or placeholders?"],
+    )
+    out = run_shell("/repo me/site\nsite for my dog\nplayful\nplaceholders\n\n/quit\n", capsys)
+    assert "a few questions before I plan" in out
+    assert "What vibe?" in out
+    # the answers reach the planner, which is the whole point of asking
+    assert scripted.seen == [("What vibe?", "playful"), ("Photos or placeholders?", "placeholders")]
+    assert "me-site: done" in out
+
+
+def test_skipped_questions_are_not_passed_on(capsys, monkeypatch):
+    scripted = _plan(
+        monkeypatch,
+        ProposedPlan("A dog site", [Step("Write index.html", ["index.html"])]),
+        questions=["What vibe?", "Photos or placeholders?"],
+    )
+    run_shell("/repo me/site\nsite for my dog\n\nplaceholders\n\n/quit\n", capsys)
+    assert scripted.seen == [("Photos or placeholders?", "placeholders")]
+
+
+def test_ask_off_skips_the_interview(capsys, monkeypatch):
+    _plan(
+        monkeypatch,
+        ProposedPlan("A dog site", [Step("Write index.html", ["index.html"])]),
+        questions=["What vibe?"],
+    )
+    out = run_shell("/repo me/site\n/ask off\nsite for my dog\n\n/quit\n", capsys)
+    assert "clarifying questions: off" in out
+    assert "What vibe?" not in out
+    assert "me-site: done" in out
 
 
 def test_a_plan_with_no_gate_says_so(capsys, monkeypatch):
