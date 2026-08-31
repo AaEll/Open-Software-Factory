@@ -4,6 +4,9 @@ Notes from reading `deepseek-harness` (sibling checkout) with one question in mi
 model actually see at the start of a session, and how is that assembled?** Written for OSF, so
 every section ends with what it means for us. Source paths are relative to that checkout.
 
+Companion piece: [`opencodearchitecture.md`](opencodearchitecture.md) reads the same question
+against opencode, and section 6 there compares the two.
+
 Not a survey of the whole harness — it is large, and most of it (Cordis plugin composition,
 profiles, bundles) is orthogonal to our problem. What follows is the context pipeline.
 
