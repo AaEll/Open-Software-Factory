@@ -7,6 +7,7 @@ Unlike `osf.local` (offline scripted stand-ins), these call live agent backends.
 
 from __future__ import annotations
 
+from osf.planner import Planner
 from osf.runtime import AgentRuntime
 from osf.types import ModelRef
 
@@ -23,3 +24,15 @@ def resolve_runtime(model: ModelRef) -> AgentRuntime:
         return ClaudeRuntime(model)
     raise ValueError(f"no engine adapter for provider {model.provider_id!r}")
 
+
+def resolve_planner(model: ModelRef) -> Planner:
+    """Pick the planning adapter for a model's provider, mirroring `resolve_runtime`."""
+    if model.provider_id == "fireworks":
+        from osf.engines.fireworks import FireworksPlanner
+
+        return FireworksPlanner(model)
+    if model.provider_id == "anthropic":
+        from osf.engines.claude import ClaudePlanner
+
+        return ClaudePlanner(model)
+    raise ValueError(f"no planning adapter for provider {model.provider_id!r}")

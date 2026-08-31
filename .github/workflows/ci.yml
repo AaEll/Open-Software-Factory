@@ -53,7 +53,7 @@ jobs:
       - name: predeployment smoke test (installed wheel)
         run: |
           pip install dist/*.whl
-          osf-smoke
+          sf-smoke
       - uses: actions/upload-artifact@v4
         with:
           name: dist
