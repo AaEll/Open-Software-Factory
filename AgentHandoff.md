@@ -35,10 +35,13 @@ free text becomes an objective, `/commands` (`/new-repo`, `/run`, `/repo`, `/mod
 (`osf/runs.py`) and the shell walks that schema — add a question to a run, not to the shell.
 `osf/prompts.py` is the dependency-free text/select/confirm toolkit.
 
-Workers get two sandboxed tools (`osf/engines/_tools.py`): `write_file` and `read_file`. The system
-prompt is built per run by `worker_system(workspace)` — it names the working directory and lists
-what is in it (via `git ls-files`, so ignored paths stay out), because an agent that cannot see the
-project rewrites files wholesale and silently drops content.
+Workers get three sandboxed tools (`osf/engines/_tools.py`): `read_file`, `edit_file` (exact string
+replacement) and `write_file`. `Toolbox` owns the session policy, borrowed from opencode's `edit`
+tool and deepseek-harness's `fs-observation-policy`: an existing file cannot be written until it has
+been read this session, and an ambiguous `edit_file` is refused rather than guessed. Prompts are
+built per run — `worker_system(workspace)` for the worker, `Shell.project_context()` for the driver
+— both naming the directory and listing what is in it via `git ls-files`. Planning without that
+listing produced work routed into files that did not exist.
 
 **The driver owns the loop.** Free text goes to `Planner.route` first (`ROUTE_SYSTEM`), which
 returns a `Decision`: `reply` (answer the user — a greeting is not a build request), `run` (start a

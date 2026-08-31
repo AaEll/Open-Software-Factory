@@ -14,8 +14,9 @@ from osf.types import Workspace
 
 WRITE_TOOL_NAME = "write_file"
 WRITE_TOOL_DESCRIPTION = (
-    "Create or overwrite a file in the project workspace. Paths are relative to the workspace "
-    "root; parent directories are created as needed."
+    "Create a new file, or replace an existing one wholesale. Paths are relative to the workspace "
+    "root; parent directories are created as needed. To change part of a file that already "
+    "exists, use edit_file instead — this replaces the whole thing."
 )
 WRITE_TOOL_PARAMETERS = {
     "type": "object",
@@ -24,6 +25,30 @@ WRITE_TOOL_PARAMETERS = {
         "content": {"type": "string", "description": "Full file contents to write"},
     },
     "required": ["path", "content"],
+    "additionalProperties": False,
+}
+
+EDIT_TOOL_NAME = "edit_file"
+EDIT_TOOL_DESCRIPTION = (
+    "Change part of an existing file by replacing an exact string. This is how you modify a file: "
+    "it leaves everything you did not name untouched. `old_string` must appear exactly once "
+    "unless replace_all is set."
+)
+EDIT_TOOL_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Relative file path"},
+        "old_string": {
+            "type": "string",
+            "description": "Exact text to replace, including indentation",
+        },
+        "new_string": {"type": "string", "description": "Text to put in its place"},
+        "replace_all": {
+            "type": "boolean",
+            "description": "Replace every occurrence (default false)",
+        },
+    },
+    "required": ["path", "old_string", "new_string"],
     "additionalProperties": False,
 }
 
@@ -46,9 +71,10 @@ WORKER_SYSTEM = (
     "You are already inside the project's root directory. Write paths relative to it — "
     "`README.md`, `src/app.py` — and never create a folder named after the project itself; that "
     "buries the work one level down, where nothing will find it.\n"
-    "write_file replaces a file wholesale, so read_file anything that already exists before you "
-    "write it and carry over everything that should survive. Silently dropping the user's content "
-    "is worse than not making the change."
+    "Use edit_file to change a file that already exists: it replaces one exact string and leaves "
+    "the rest alone. write_file replaces the entire file, so reach for it only to create something "
+    "new. Change what was asked for and leave the rest of the project as you found it — an "
+    "unrequested rewrite is a worse outcome than a small change."
 )
 
 # How many entries of the project to show. Enough to orient in a small repo, short enough not to
@@ -114,3 +140,86 @@ def apply_read(workspace: Workspace, rel_path: str) -> tuple[str, bool]:
         return target.read_text(encoding="utf-8"), False
     except UnicodeDecodeError:
         return f"{rel_path} is not a text file", True
+
+
+def apply_edit(
+    workspace: Workspace, rel_path: str, old: str, new: str, *, replace_all: bool = False
+) -> tuple[str, bool]:
+    """Replace an exact string inside a file. Returns (message, is_error).
+
+    Ambiguity is refused rather than guessed at: a match that appears twice could mean either
+    place, and picking one silently is how an agent corrupts a file it was asked to improve.
+    """
+    if not old:
+        return ("old_string must not be empty. Use write_file to create a new file.", True)
+    if old == new:
+        return ("old_string and new_string are identical, so there is nothing to change.", True)
+
+    existing, failed = apply_read(workspace, rel_path)
+    if failed:
+        return existing, True
+
+    occurrences = existing.count(old)
+    if occurrences == 0:
+        return (
+            f"old_string does not appear in {rel_path}. It must match exactly, including "
+            "whitespace and indentation. Read the file again and copy the text you mean.",
+            True,
+        )
+    if occurrences > 1 and not replace_all:
+        return (
+            f"old_string appears {occurrences} times in {rel_path}. Include more surrounding "
+            "text so it matches once, or set replace_all to true.",
+            True,
+        )
+
+    updated = existing.replace(old, new) if replace_all else existing.replace(old, new, 1)
+    Path(workspace.path, rel_path).write_text(updated, encoding="utf-8")
+    return (f"Replaced {occurrences if replace_all else 1} occurrence(s) in {rel_path}", False)
+
+
+class Toolbox:
+    """The tools for one worker session, and the policy that governs them.
+
+    The policy is read-before-overwrite: `write_file` may create anything, but it may only replace
+    a file the session has already read. An agent that has not read a file cannot know what it is
+    destroying, and the prompt asking it to be careful is advice — this is the part that holds.
+    """
+
+    def __init__(self, workspace: Workspace) -> None:
+        self.workspace = workspace
+        self.seen: set[str] = set()
+
+    def dispatch(self, name: str, args: dict) -> tuple[str, bool, str]:
+        """Run one tool call. Returns (message for the model, is_error, transcript event kind)."""
+        path = args.get("path", "")
+        if name == READ_TOOL_NAME:
+            message, failed = apply_read(self.workspace, path)
+            if not failed:
+                self.seen.add(path)
+            return message, failed, "file.read"
+        if name == EDIT_TOOL_NAME:
+            message, failed = apply_edit(
+                self.workspace,
+                path,
+                args.get("old_string", ""),
+                args.get("new_string", ""),
+                replace_all=bool(args.get("replace_all")),
+            )
+            if not failed:
+                self.seen.add(path)
+            return message, failed, "file.edit"
+        if name == WRITE_TOOL_NAME:
+            if Path(self.workspace.path, path).is_file() and path not in self.seen:
+                return (
+                    f"{path} already exists and you have not read it. Overwriting it would throw "
+                    "away whatever is in it. read_file it first, then edit_file the part you mean "
+                    "to change.",
+                    True,
+                    "file.refused",
+                )
+            message, failed = apply_write(self.workspace, path, args.get("content", ""))
+            if not failed:
+                self.seen.add(path)
+            return message, failed, "file.write"
+        return f"Unknown tool {name}", True, "error"

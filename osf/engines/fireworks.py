@@ -15,14 +15,16 @@ import os
 from collections.abc import AsyncIterator, Sequence
 
 from osf.engines._tools import (
+    EDIT_TOOL_DESCRIPTION,
+    EDIT_TOOL_NAME,
+    EDIT_TOOL_PARAMETERS,
     READ_TOOL_DESCRIPTION,
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
     WRITE_TOOL_DESCRIPTION,
     WRITE_TOOL_NAME,
     WRITE_TOOL_PARAMETERS,
-    apply_read,
-    apply_write,
+    Toolbox,
     worker_system,
 )
 from osf.planner import (
@@ -80,6 +82,14 @@ _TOOLS = [
             "parameters": READ_TOOL_PARAMETERS,
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": EDIT_TOOL_NAME,
+            "description": EDIT_TOOL_DESCRIPTION,
+            "parameters": EDIT_TOOL_PARAMETERS,
+        },
+    },
 ]
 
 
@@ -130,6 +140,7 @@ class FireworksRuntime:
 
     def _run_loop(self, workspace: Workspace, prompt: str) -> AgentResult:
         client = make_client(self._client)
+        toolbox = Toolbox(workspace)
         messages: list[dict] = [
             {"role": "system", "content": worker_system(workspace)},
             {"role": "user", "content": prompt},
@@ -151,12 +162,8 @@ class FireworksRuntime:
 
             for call in message.tool_calls:
                 args = json.loads(call.function.arguments)
-                if call.function.name == READ_TOOL_NAME:
-                    outcome, is_error = apply_read(workspace, args["path"])
-                    transcript.append(AgentEvent(kind="file.read", data={"path": args["path"]}))
-                else:
-                    outcome, is_error = apply_write(workspace, args["path"], args["content"])
-                    transcript.append(AgentEvent(kind="file.write", data={"path": args["path"]}))
+                outcome, is_error, kind = toolbox.dispatch(call.function.name, args)
+                transcript.append(AgentEvent(kind=kind, data={"path": args.get("path", "")}))
                 messages.append(
                     {"role": "tool", "tool_call_id": call.id, "content": outcome}
                 )
@@ -177,13 +184,13 @@ class FireworksPlanner:
         self._model = model
         self._client = client
 
-    def route(self, request: str, catalog: str = "") -> Decision:
-        system = f"{ROUTE_SYSTEM}\n\n{catalog}" if catalog else ROUTE_SYSTEM
+    def route(self, request: str, catalog: str = "", context: str = "") -> Decision:
+        system = "\n\n".join(part for part in (ROUTE_SYSTEM, catalog, context) if part)
         return parse_decision(self._complete(system, [{"role": "user", "content": request}], 500))
 
-    def clarify(self, request: str) -> list[str]:
-        reply = self._complete(CLARIFY_SYSTEM, [{"role": "user", "content": request}], 500)
-        return parse_questions(reply)
+    def clarify(self, request: str, context: str = "") -> list[str]:
+        system = f"{CLARIFY_SYSTEM}\n\n{context}" if context else CLARIFY_SYSTEM
+        return parse_questions(self._complete(system, [{"role": "user", "content": request}], 500))
 
     def propose(
         self,
@@ -192,9 +199,15 @@ class FireworksPlanner:
         answers: Sequence[Answer] = (),
         *,
         shared_workspace: bool = False,
+        context: str = "",
     ) -> ProposedPlan:
         return propose_with_retry(
-            self._complete, request, exchanges, answers, shared_workspace=shared_workspace
+            self._complete,
+            request,
+            exchanges,
+            answers,
+            shared_workspace=shared_workspace,
+            context=context,
         )
 
     def _complete(self, system: str, messages: list[dict], max_tokens: int) -> str:

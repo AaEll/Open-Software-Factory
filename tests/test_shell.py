@@ -174,13 +174,13 @@ def _plan(monkeypatch, *plans, questions=()):
     last = plans[-1]
 
     class _Scripted:
-        def route(self, request, catalog=""):
+        def route(self, request, catalog="", context=""):
             return Decision(action="plan")
 
-        def clarify(self, request):
+        def clarify(self, request, context=""):
             return list(questions)
 
-        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False):
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
             _Scripted.seen = list(answers)
             _Scripted.shared = shared_workspace
             return remaining.pop(0) if remaining else last
@@ -220,13 +220,13 @@ def test_declining_the_plan_runs_nothing(capsys, monkeypatch):
 
 def test_a_planner_failure_falls_back_to_the_request(capsys, monkeypatch):
     class _Broken:
-        def route(self, request, catalog=""):
+        def route(self, request, catalog="", context=""):
             return Decision(action="plan")
 
-        def clarify(self, request):
+        def clarify(self, request, context=""):
             return []
 
-        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False):
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
             raise RuntimeError("no API key")
 
     monkeypatch.setattr(Session, "planner", lambda _self: _Broken())
@@ -469,14 +469,14 @@ def test_create_repo_uses_the_detected_owner_without_asking(monkeypatch):
 
 def _router(monkeypatch, decision: Decision):
     class _Router:
-        def route(self, request, catalog=""):
+        def route(self, request, catalog="", context=""):
             _Router.catalog = catalog
             return decision
 
-        def clarify(self, request):
+        def clarify(self, request, context=""):
             return []
 
-        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False):
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
             return ProposedPlan("planned anyway", [Step(request)])
 
     monkeypatch.setattr(Session, "planner", lambda _self: _Router())
@@ -506,13 +506,13 @@ def test_an_unknown_workflow_falls_back_to_planning(capsys, monkeypatch):
 
 def test_a_routing_failure_still_plans(capsys, monkeypatch):
     class _Broken:
-        def route(self, request, catalog=""):
+        def route(self, request, catalog="", context=""):
             raise RuntimeError("provider down")
 
-        def clarify(self, request):
+        def clarify(self, request, context=""):
             return []
 
-        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False):
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
             return ProposedPlan("planned anyway", [Step(request)])
 
     monkeypatch.setattr(Session, "planner", lambda _self: _Broken())

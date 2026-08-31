@@ -141,10 +141,18 @@ and the driver re-plans with it:
 
 Enter, `y`, `ok`, `run` accept; `n`, `no`, `cancel` abandon the request; anything else is feedback.
 
-Each step is built by its own agent, which is told the working directory it is in and what that
-directory already contains (git's view of it, so ignored files like `.env` and `node_modules/` stay
-out). It can read a file before rewriting it, which is what lets it extend existing work rather
-than replace it.
+The driver and each worker are both told the working directory and what it already contains (git's
+view, so ignored files like `.env` and `node_modules/` stay out) — the plan is made against the
+repository you actually have, not an imagined one.
+
+Workers have three tools: `read_file`, `edit_file` (replace one exact string, leaving the rest
+alone), and `write_file` (create, or replace wholesale). Two rules are enforced rather than
+requested:
+
+- **an existing file cannot be overwritten until it has been read** in that session — a blind
+  `write_file` over your work is refused with an explanation
+- **an ambiguous edit is refused**: if the text to replace appears more than once, the worker is
+  told to be more specific rather than guessing which one you meant
 
 Each step is reviewed against its own files. Locally the steps run in
 order **in the same repository**, so a later step sees what the earlier ones wrote and can extend

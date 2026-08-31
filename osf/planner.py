@@ -62,7 +62,10 @@ _PLAN_BASE = (
 _PLAN_SHARED = (
     "The steps run in order in one repository, each seeing the files the previous steps wrote, so "
     "a later step may extend or refine earlier work. Existing files in the repository may be "
-    "edited — say so in the step's spec when that is the intent."
+    "edited — say so in the step's spec when that is the intent.\n"
+    "Work with the project as it is: put changes in the files that already hold that behaviour, "
+    "and name those files in the step. Do not restructure, rename or split existing files unless "
+    "the user asked for it — moving an entry point into a new file breaks the way they run it."
 )
 _PLAN_ISOLATED = (
     "Each step is built by a separate agent in its own empty workspace, so a step must stand alone "
@@ -70,9 +73,10 @@ _PLAN_ISOLATED = (
 )
 
 
-def plan_system(*, shared_workspace: bool = False) -> str:
-    """The planning prompt, told whether steps can build on each other."""
-    return _PLAN_BASE + (_PLAN_SHARED if shared_workspace else _PLAN_ISOLATED)
+def plan_system(*, shared_workspace: bool = False, context: str = "") -> str:
+    """The planning prompt: whether steps share a workspace, and what the project already holds."""
+    system = _PLAN_BASE + (_PLAN_SHARED if shared_workspace else _PLAN_ISOLATED)
+    return f"{system}\n\n{context}" if context else system
 
 
 PLAN_SYSTEM = plan_system()  # the isolated default, kept for callers that don't care
@@ -193,11 +197,16 @@ Answer = tuple[str, str]
 
 
 class Planner(Protocol):
-    """The driver agent: decides what a message is, asks what it needs, then plans."""
+    """The driver agent: decides what a message is, asks what it needs, then plans.
 
-    def route(self, request: str, catalog: str = "") -> Decision: ...
+    `context` describes the project being worked on. A planner that cannot see the repository
+    plans against an imagined one — it will happily route work into a file that does not exist
+    and leave the real entry point stranded.
+    """
 
-    def clarify(self, request: str) -> list[str]: ...
+    def route(self, request: str, catalog: str = "", context: str = "") -> Decision: ...
+
+    def clarify(self, request: str, context: str = "") -> list[str]: ...
 
     def propose(
         self,
@@ -206,6 +215,7 @@ class Planner(Protocol):
         answers: Sequence[Answer] = (),
         *,
         shared_workspace: bool = False,
+        context: str = "",
     ) -> ProposedPlan: ...
 
 
@@ -217,12 +227,12 @@ class StaticPlanner:
     fails forever chasing a file that was never meant to exist.
     """
 
-    def route(self, request: str, catalog: str = "") -> Decision:
+    def route(self, request: str, catalog: str = "", context: str = "") -> Decision:
         # With no model there is no judgement to apply: treat everything as work to plan, which
         # is what the shell did before routing existed.
         return Decision(action="plan")
 
-    def clarify(self, request: str) -> list[str]:
+    def clarify(self, request: str, context: str = "") -> list[str]:
         return []  # with no model there is nobody to ask, and nobody to use the answers
 
     def propose(
@@ -232,6 +242,7 @@ class StaticPlanner:
         answers: Sequence[Answer] = (),
         *,
         shared_workspace: bool = False,
+        context: str = "",
     ) -> ProposedPlan:
         # Answers are deliberately dropped: with no model to interpret them, folding them into the
         # spec would just paste an interview transcript in as the work to do.
@@ -317,13 +328,14 @@ def propose_with_retry(
     *,
     attempts: int = 2,
     shared_workspace: bool = False,
+    context: str = "",
 ) -> ProposedPlan:
     """Ask an engine for a plan, nudging it once if the reply isn't a usable plan.
 
     Models drift out of JSON now and then — a stray sentence, a truncated object. One corrective
     round trip recovers nearly all of it, and is far cheaper than dropping the user's request.
     """
-    system = plan_system(shared_workspace=shared_workspace)
+    system = plan_system(shared_workspace=shared_workspace, context=context)
     messages = build_messages(request, exchanges, answers)
     last: ValueError | None = None
     for _attempt in range(attempts):

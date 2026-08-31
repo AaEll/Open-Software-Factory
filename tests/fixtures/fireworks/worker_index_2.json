@@ -1,24 +1,24 @@
 {
-  "id": "chatcmpl-4d996edf2c51459a973dd7f4d6b605db",
+  "id": "chatcmpl-08bf5da4621f40d0a37531a43df5147a",
   "choices": [
     {
       "finish_reason": "stop",
       "index": 0,
       "logprobs": null,
       "message": {
-        "content": "Done \u2014 created `index.html` with a cheerful, self-contained landing page for Pobrecita.",
+        "content": "Created `index.html` as a self-contained landing page for Pobrecita the dog with inline CSS, SVG artwork, interactive buttons, and animations.",
         "refusal": null,
         "role": "assistant",
         "annotations": null,
         "audio": null,
         "function_call": null,
         "tool_calls": null,
-        "reasoning_content": "Need final response concise. Already built file.",
+        "reasoning_content": "The file has been written successfully. I should now stop.",
         "tools": null
       }
     }
   ],
-  "created": 1788129374,
+  "created": 1788137083,
   "model": "accounts/fireworks/models/kimi-k2p7-code",
   "object": "chat.completion",
   "metadata": null,
@@ -26,13 +26,13 @@
   "service_tier": null,
   "system_fingerprint": null,
   "usage": {
-    "completion_tokens": 32,
-    "prompt_tokens": 4559,
-    "total_tokens": 4591,
+    "completion_tokens": 45,
+    "prompt_tokens": 7340,
+    "total_tokens": 7385,
     "completion_tokens_details": {
       "accepted_prediction_tokens": null,
       "audio_tokens": null,
-      "reasoning_tokens": 9,
+      "reasoning_tokens": 12,
       "rejected_prediction_tokens": null,
       "text_tokens": null
     },
@@ -40,12 +40,12 @@
     "prompt_tokens_details": {
       "audio_tokens": null,
       "cache_write_tokens": null,
-      "cached_tokens": 355,
+      "cached_tokens": 527,
       "image_tokens": null,
       "text_tokens": null
     },
     "output_tokens_details": {
-      "reasoning_tokens": 9
+      "reasoning_tokens": 12
     }
   }
 }

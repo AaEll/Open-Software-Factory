@@ -30,6 +30,7 @@ from osf.config import (
     valid_repo_name,
 )
 from osf.driver import Driver, ObjectiveOutcome
+from osf.engines._tools import workspace_listing
 from osf.forge import Forge
 from osf.isolation import IsolationBackend
 from osf.local.forge import InMemoryForge, NoForge
@@ -190,13 +191,27 @@ class Shell:
             return
         self.objective(line)
 
+    def project_context(self) -> str:
+        """Describe the project to the driver, so it plans against the repository that exists."""
+        project = self.session.project if self.session.forge == "local" else None
+        if project is None:
+            return ""
+        listing = workspace_listing(Workspace(str(project), str(project)))
+        if not listing:
+            return f"The project at {project} is empty."
+        files = "\n".join(f"- {path}" for path in listing)
+        return (
+            f"The project at {project} already contains these files:\n{files}\n"
+            "Plan changes into the files that already hold that behaviour."
+        )
+
     def route(self, line: str) -> Decision:
         """Ask the driver what the message is. Anything unusable means "treat it as work"."""
         catalog = route_catalog(
             [(run.name, run.description, [p.name for p in run.params]) for run in all_runs()]
         )
         try:
-            return self.session.planner().route(line, catalog)
+            return self.session.planner().route(line, catalog, self.project_context())
         except Exception as exc:
             self.error(f"driver unavailable ({type(exc).__name__}: {exc})")
             return Decision(action="plan")
@@ -297,7 +312,7 @@ class Shell:
     def interview(self, request: str) -> list[Answer]:
         """Put the driver's own questions to the user. Blank answers are simply skipped."""
         try:
-            questions = self.session.planner().clarify(request)
+            questions = self.session.planner().clarify(request, self.project_context())
         except Exception as exc:
             self.error(f"driver unavailable ({type(exc).__name__}: {exc})")
             return []
@@ -314,7 +329,11 @@ class Shell:
         self.note("planning…")
         try:
             return self.session.planner().propose(
-                request, exchanges, answers, shared_workspace=self.session.forge == "local"
+                request,
+                exchanges,
+                answers,
+                shared_workspace=self.session.forge == "local",
+                context=self.project_context(),
             )
         except Exception as exc:
             self.error(f"planner unavailable ({type(exc).__name__}: {exc})")

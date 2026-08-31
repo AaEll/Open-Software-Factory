@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from osf.engines._tools import apply_read, apply_write
+from osf.engines._tools import Toolbox, apply_edit, apply_read, apply_write
 from osf.types import Workspace
 
 
@@ -62,3 +62,110 @@ def test_a_read_before_a_rewrite_is_what_preserves_content(workspace, tmp_path: 
     result = (tmp_path / "index.html").read_text(encoding="utf-8")
     assert "A very good dog." in result
     assert "<footer>" in result
+
+
+# --- edit_file: exact replacement, ambiguity refused --------------------------------------------
+
+
+def test_edit_replaces_one_exact_string_and_leaves_the_rest(workspace, tmp_path: Path):
+    (tmp_path / "app.py").write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
+    message, is_error = apply_edit(workspace, "app.py", "b = 2", "b = 22")
+    assert not is_error
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "a = 1\nb = 22\nc = 3\n"
+
+
+def test_edit_refuses_an_ambiguous_match(workspace, tmp_path: Path):
+    """Two matches could mean either place; guessing is how a file gets quietly corrupted."""
+    (tmp_path / "app.py").write_text("x = 1\ny = 0\nz = 1\n", encoding="utf-8")
+    message, is_error = apply_edit(workspace, "app.py", "= 1", "= 9")
+    assert is_error
+    assert "appears 2 times" in message
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "x = 1\ny = 0\nz = 1\n"  # untouched
+
+
+def test_replace_all_accepts_the_ambiguity_deliberately(workspace, tmp_path: Path):
+    (tmp_path / "app.py").write_text("x = 1\nz = 1\n", encoding="utf-8")
+    message, is_error = apply_edit(workspace, "app.py", "= 1", "= 9", replace_all=True)
+    assert not is_error
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "x = 9\nz = 9\n"
+
+
+def test_edit_refuses_an_empty_old_string(workspace, tmp_path: Path):
+    (tmp_path / "app.py").write_text("a = 1\n", encoding="utf-8")
+    message, is_error = apply_edit(workspace, "app.py", "", "everything")
+    assert is_error
+    assert "Use write_file" in message  # an empty match is a rewrite wearing an edit's clothes
+
+
+def test_edit_explains_a_near_miss(workspace, tmp_path: Path):
+    (tmp_path / "app.py").write_text("    indented = True\n", encoding="utf-8")
+    message, is_error = apply_edit(workspace, "app.py", "indented = False", "x")
+    assert is_error
+    assert "must match exactly" in message
+
+
+def test_edit_on_a_missing_file_says_so(workspace):
+    message, is_error = apply_edit(workspace, "nope.py", "a", "b")
+    assert is_error
+    assert "does not exist" in message
+
+
+# --- read-before-overwrite ----------------------------------------------------------------------
+
+
+def test_write_may_create_anything(workspace, tmp_path: Path):
+    box = Toolbox(workspace)
+    message, is_error, kind = box.dispatch("write_file", {"path": "new.py", "content": "x = 1"})
+    assert not is_error and kind == "file.write"
+    assert (tmp_path / "new.py").is_file()
+
+
+def test_write_over_an_unread_file_is_refused(workspace, tmp_path: Path):
+    """The failure this policy exists for: a blind overwrite that discards the user's content."""
+    (tmp_path / "index.html").write_text("<p>A very good dog.</p>", encoding="utf-8")
+    box = Toolbox(workspace)
+
+    message, is_error, kind = box.dispatch(
+        "write_file", {"path": "index.html", "content": "<p>x</p>"}
+    )
+    assert is_error
+    assert kind == "file.refused"
+    assert "read_file it first" in message
+    assert "A very good dog." in (tmp_path / "index.html").read_text(encoding="utf-8")
+
+
+def test_write_is_allowed_once_the_file_has_been_read(workspace, tmp_path: Path):
+    (tmp_path / "index.html").write_text("<p>A very good dog.</p>", encoding="utf-8")
+    box = Toolbox(workspace)
+
+    box.dispatch("read_file", {"path": "index.html"})
+    message, is_error, _kind = box.dispatch(
+        "write_file", {"path": "index.html", "content": "<p>rewritten deliberately</p>"}
+    )
+    assert not is_error
+    assert (tmp_path / "index.html").read_text(encoding="utf-8") == "<p>rewritten deliberately</p>"
+
+
+def test_editing_counts_as_having_seen_the_file(workspace, tmp_path: Path):
+    (tmp_path / "app.py").write_text("a = 1\n", encoding="utf-8")
+    box = Toolbox(workspace)
+
+    box.dispatch("edit_file", {"path": "app.py", "old_string": "a = 1", "new_string": "a = 2"})
+    _message, is_error, _kind = box.dispatch("write_file", {"path": "app.py", "content": "a = 3\n"})
+    assert not is_error
+
+
+def test_the_policy_is_per_session(workspace, tmp_path: Path):
+    """One worker reading a file must not license another worker's blind overwrite."""
+    (tmp_path / "app.py").write_text("original\n", encoding="utf-8")
+    Toolbox(workspace).dispatch("read_file", {"path": "app.py"})
+
+    _message, is_error, _kind = Toolbox(workspace).dispatch(
+        "write_file", {"path": "app.py", "content": "clobbered"}
+    )
+    assert is_error
+
+
+def test_an_unknown_tool_is_reported_not_raised(workspace):
+    message, is_error, _kind = Toolbox(workspace).dispatch("rm_rf", {"path": "/"})
+    assert is_error and "Unknown tool" in message

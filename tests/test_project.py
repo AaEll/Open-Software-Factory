@@ -243,10 +243,10 @@ def test_the_planner_is_told_steps_share_the_project(capsys, repo: Path, monkeyp
     seen = {}
 
     class _Spy:
-        def clarify(self, request):
+        def clarify(self, request, context=""):
             return []
 
-        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False):
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
             seen["shared"] = shared_workspace
             from osf.planner import ProposedPlan, Step
 
@@ -315,3 +315,88 @@ def test_a_directory_without_git_is_still_listed(tmp_path: Path):
 
     (tmp_path / "notes.md").write_text("x", encoding="utf-8")
     assert workspace_listing(Workspace(path=str(tmp_path), handle=str(tmp_path))) == ["notes.md"]
+
+
+# --- what the driver is told about the project --------------------------------------------------
+
+
+def test_the_planner_is_shown_the_project_files(capsys, repo: Path, monkeypatch):
+    """A planner that cannot see the repo plans into files that don't exist.
+
+    Observed for real: asked to add a flag to a single-file app, it planned the work into a new
+    `cli.py`, and the worker duly moved the entry point there and broke it.
+    """
+    (repo / "todo.py").write_text("# the app\n", encoding="utf-8")
+    seen = {}
+
+    class _Spy:
+        def route(self, request, catalog="", context=""):
+            seen["route"] = context
+            from osf.planner import Decision
+
+            return Decision(action="plan")
+
+        def clarify(self, request, context=""):
+            seen["clarify"] = context
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
+            seen["propose"] = context
+            from osf.planner import ProposedPlan, Step
+
+            return ProposedPlan("Do it", [Step("Edit todo.py", ["todo.py"])])
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Spy())
+    run_shell("add a flag\n\ny\n/quit\n", capsys, Session(project=repo, forge="local"))
+
+    assert "todo.py" in seen["propose"]  # the plan is made against the repository that exists
+    assert "todo.py" in seen["route"]
+    assert "todo.py" in seen["clarify"]
+    assert str(repo) in seen["propose"]
+
+
+def test_an_empty_project_is_described_as_empty(capsys, tmp_path: Path, monkeypatch):
+    git(tmp_path, "init", "-q")
+    seen = {}
+
+    class _Spy:
+        def route(self, request, catalog="", context=""):
+            from osf.planner import Decision
+
+            return Decision(action="plan")
+
+        def clarify(self, request, context=""):
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
+            seen["context"] = context
+            from osf.planner import ProposedPlan, Step
+
+            return ProposedPlan("Do it", [Step("Make something")])
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Spy())
+    run_shell("build something\n\ny\n/quit\n", capsys, Session(project=tmp_path, forge="local"))
+    assert "is empty" in seen["context"]
+
+
+def test_no_project_context_when_the_work_is_not_local(capsys, monkeypatch):
+    seen = {}
+
+    class _Spy:
+        def route(self, request, catalog="", context=""):
+            from osf.planner import Decision
+
+            return Decision(action="plan")
+
+        def clarify(self, request, context=""):
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
+            seen["context"] = context
+            from osf.planner import ProposedPlan, Step
+
+            return ProposedPlan("Do it", [Step("Make something")])
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Spy())
+    run_shell("/repo me/site\nbuild something\n\n/quit\n", capsys, Session(forge="memory"))
+    assert seen["context"] == ""  # a throwaway workspace has no project to describe
