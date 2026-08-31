@@ -60,6 +60,17 @@ cp .env.example .env              # then set FIREWORKS_API_KEY in .env
 python -m evals.efactory_live
 ```
 
+### PromptPay integration (MVP site → preview)
+
+OSF generates the site; [PromptPay](https://github.com/AaEll/PromptPay) publishes it. Requires
+PromptPay running on `PROMPTPAY_URL` (default `http://127.0.0.1:8090`). See
+[`docs/promptpay-integration.md`](docs/promptpay-integration.md).
+
+```bash
+cp .env.example .env              # FIREWORKS_API_KEY + optional PROMPTPAY_URL
+python -m evals.mvp_promptpay
+```
+
 ## CI/CD
 
 Three build artifacts: **wheel + sdist** for local `pip install`, and a **container** for cloud
