@@ -109,7 +109,7 @@ class ClaudeRuntime:
                 model=self._model.model_id,
                 max_tokens=16000,
                 thinking={"type": "adaptive"},
-                system=worker_system(workspace),
+                system=worker_system(workspace, model_id=self._model.model_id),
                 tools=[_WRITE_TOOL, _READ_TOOL, _EDIT_TOOL],
                 messages=messages,
             )

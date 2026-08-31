@@ -10,6 +10,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from osf.instructions import load as load_instructions
 from osf.types import Workspace
 
 WRITE_TOOL_NAME = "write_file"
@@ -66,8 +67,8 @@ READ_TOOL_PARAMETERS = {
 
 WORKER_SYSTEM = (
     "You are a worker agent in an autonomous software factory. You implement the requested change "
-    "by writing files with the write_file tool, then stop. Keep the implementation simple and "
-    "self-contained. Do not ask questions or explain at length — just build it.\n"
+    "with the file tools, then stop. Keep the implementation simple and self-contained. Do not ask "
+    "questions or explain at length — just build it.\n"
     "You are already inside the project's root directory. Write paths relative to it — "
     "`README.md`, `src/app.py` — and never create a folder named after the project itself; that "
     "buries the work one level down, where nothing will find it.\n"
@@ -76,6 +77,34 @@ WORKER_SYSTEM = (
     "new. Change what was asked for and leave the rest of the project as you found it — an "
     "unrequested rewrite is a worse outcome than a small change."
 )
+
+# Model-specific guidance. opencode ships a whole prompt per model family; the same idea at our
+# scale is a short overlay on the shared instructions, dispatched on the model id. This is our own
+# wording — it keeps the behaviours that matter for a *worker* (act with tools, batch them, follow
+# the schemas) and drops the ones that assume an interactive session, because our worker has no
+# user to ask and no shell to run.
+KIMI_GUIDANCE = (
+    "Act with the tools rather than describing what you would do — a plan in prose changes "
+    "nothing on disk, and nobody reads your commentary.\n"
+    "Issue tool calls in parallel when they do not depend on each other; reading three files takes "
+    "one step, not three.\n"
+    "Follow each tool's parameter schema exactly. A rejected call costs a whole round trip.\n"
+    "You cannot ask anyone anything: there is no user reading this and no shell to run. If a "
+    "detail is unspecified, choose the ordinary answer and continue, and note it in a file if it "
+    "matters. Stop as soon as the requested change is complete."
+)
+
+MODEL_GUIDANCE = (("kimi", KIMI_GUIDANCE),)
+
+
+def guidance_for(model_id: str | None) -> str:
+    """Extra instructions for the model family we are talking to, if we have any."""
+    lowered = (model_id or "").lower()
+    for marker, text in MODEL_GUIDANCE:
+        if marker in lowered:
+            return text
+    return ""
+
 
 # How many entries of the project to show. Enough to orient in a small repo, short enough not to
 # crowd out the actual request in the prompt.
@@ -106,15 +135,19 @@ def workspace_listing(workspace: Workspace, *, limit: int = LISTING_LIMIT) -> li
     return sorted(paths)[:limit]
 
 
-def worker_system(workspace: Workspace) -> str:
-    """The worker prompt, told where it is working and what is already there."""
+def worker_system(workspace: Workspace, *, model_id: str | None = None) -> str:
+    """The worker prompt: shared instructions, model guidance, where it is, and house rules."""
     listing = workspace_listing(workspace)
     if listing:
         contents = "It already contains:\n" + "\n".join(f"- {path}" for path in listing)
         contents += "\nRead any of these you are about to change."
     else:
         contents = "It is empty."
-    return f"{WORKER_SYSTEM}\n\nYour working directory is {workspace.path}. {contents}"
+
+    parts = [WORKER_SYSTEM, guidance_for(model_id)]
+    parts.append(f"Your working directory is {workspace.path}. {contents}")
+    parts.append(load_instructions(workspace.path).render())
+    return "\n\n".join(part for part in parts if part)
 
 
 def apply_write(workspace: Workspace, rel_path: str, content: str) -> tuple[str, bool]:

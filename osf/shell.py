@@ -32,6 +32,7 @@ from osf.config import (
 from osf.driver import Driver, ObjectiveOutcome
 from osf.engines._tools import workspace_listing
 from osf.forge import Forge
+from osf.instructions import load as load_instructions
 from osf.isolation import IsolationBackend
 from osf.local.forge import InMemoryForge, NoForge
 from osf.local.isolation import TempdirIsolation
@@ -197,13 +198,18 @@ class Shell:
         if project is None:
             return ""
         listing = workspace_listing(Workspace(str(project), str(project)))
-        if not listing:
-            return f"The project at {project} is empty."
-        files = "\n".join(f"- {path}" for path in listing)
-        return (
-            f"The project at {project} already contains these files:\n{files}\n"
-            "Plan changes into the files that already hold that behaviour."
-        )
+        if listing:
+            files = "\n".join(f"- {path}" for path in listing)
+            described = (
+                f"The project at {project} already contains these files:\n{files}\n"
+                "Plan changes into the files that already hold that behaviour."
+            )
+        else:
+            described = f"The project at {project} is empty."
+        # The project's own conventions shape the plan, not just the code: a repo that says "one
+        # coherent change per PR" should not be handed a five-step plan.
+        conventions = load_instructions(project).render()
+        return "\n\n".join(part for part in (described, conventions) if part)
 
     def route(self, line: str) -> Decision:
         """Ask the driver what the message is. Anything unusable means "treat it as work"."""

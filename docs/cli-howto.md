@@ -145,6 +145,11 @@ The driver and each worker are both told the working directory and what it alrea
 view, so ignored files like `.env` and `node_modules/` stay out) — the plan is made against the
 repository you actually have, not an imagined one.
 
+**Your project's own conventions are read too.** If the repository has an `AGENTS.md` (or a
+`CLAUDE.md`), it is included in both the plan and the work, along with a global
+`~/.config/osf/AGENTS.md` if you keep one. The project's file wins where they disagree, and when
+there is too much to fit, broader files are dropped whole before yours is truncated.
+
 Workers have three tools: `read_file`, `edit_file` (replace one exact string, leaving the rest
 alone), and `write_file` (create, or replace wholesale). Two rules are enforced rather than
 requested:

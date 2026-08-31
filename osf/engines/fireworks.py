@@ -142,7 +142,7 @@ class FireworksRuntime:
         client = make_client(self._client)
         toolbox = Toolbox(workspace)
         messages: list[dict] = [
-            {"role": "system", "content": worker_system(workspace)},
+            {"role": "system", "content": worker_system(workspace, model_id=self._model.model_id)},
             {"role": "user", "content": prompt},
         ]
         transcript: list[AgentEvent] = []

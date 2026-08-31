@@ -35,6 +35,12 @@ free text becomes an objective, `/commands` (`/new-repo`, `/run`, `/repo`, `/mod
 (`osf/runs.py`) and the shell walks that schema — add a question to a run, not to the shell.
 `osf/prompts.py` is the dependency-free text/select/confirm toolkit.
 
+`osf/instructions.py` loads the project's `AGENTS.md`/`CLAUDE.md` (plus a global file) into both the
+driver's planning context and the worker prompt — a repo's conventions are context the model is
+owed, per opencode and deepseek-harness alike. `_tools.guidance_for(model_id)` adds a short
+model-family overlay (Kimi today), our own wording rather than a copy, adapted to a worker that has
+no shell and no user to ask.
+
 Workers get three sandboxed tools (`osf/engines/_tools.py`): `read_file`, `edit_file` (exact string
 replacement) and `write_file`. `Toolbox` owns the session policy, borrowed from opencode's `edit`
 tool and deepseek-harness's `fs-observation-policy`: an existing file cannot be written until it has

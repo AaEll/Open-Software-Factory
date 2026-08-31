@@ -169,3 +169,33 @@ def test_the_policy_is_per_session(workspace, tmp_path: Path):
 def test_an_unknown_tool_is_reported_not_raised(workspace):
     message, is_error, _kind = Toolbox(workspace).dispatch("rm_rf", {"path": "/"})
     assert is_error and "Unknown tool" in message
+
+
+# --- project conventions and model guidance -----------------------------------------------------
+
+
+def test_the_project_instruction_file_reaches_the_worker(workspace, tmp_path: Path):
+    """A repo's AGENTS.md states its house rules; an agent that never sees them will break them."""
+    from osf.engines._tools import worker_system
+
+    (tmp_path / "AGENTS.md").write_text("Every module starts with `# house style`.\n", "utf-8")
+    prompt = worker_system(workspace)
+    assert "house style" in prompt
+    assert "AGENTS.md" in prompt
+
+
+def test_kimi_gets_its_own_guidance(workspace):
+    from osf.engines._tools import worker_system
+
+    generic = worker_system(workspace)
+    kimi = worker_system(workspace, model_id="accounts/fireworks/models/kimi-k2p7-code")
+    assert "in parallel" in kimi
+    assert "in parallel" not in generic  # the overlay is per model family, not for everyone
+
+
+def test_the_worker_is_told_it_cannot_ask(workspace):
+    """Our worker runs unattended — guidance written for an interactive session would mislead it."""
+    from osf.engines._tools import worker_system
+
+    prompt = worker_system(workspace, model_id="kimi-k2")
+    assert "cannot ask anyone" in prompt
