@@ -115,9 +115,7 @@ class Driver:
             prompt = apply_skills(prompt, self._skills, item.skills)
         await self._runtime.prompt(session, prompt)
         await self._runtime.result(session)
-        await self._isolation.exec(workspace, ["git", "add", "-A"])
-        # A no-op commit (nothing changed since last round) is fine; the forge state still advances.
-        await self._isolation.exec(workspace, ["git", "commit", "-q", "-m", f"feat: {item.spec}"])
+        await self._isolation.checkpoint(workspace, f"feat: {item.spec}")
 
 
 def _worker_prompt(item: WorkItem, feedback: str) -> str:

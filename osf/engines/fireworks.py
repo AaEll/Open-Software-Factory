@@ -11,16 +11,39 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator, Sequence
 
 from osf.engines._tools import (
-    WORKER_SYSTEM,
+    EDIT_TOOL_DESCRIPTION,
+    EDIT_TOOL_NAME,
+    EDIT_TOOL_PARAMETERS,
+    GLOB_TOOL_DESCRIPTION,
+    GLOB_TOOL_NAME,
+    GLOB_TOOL_PARAMETERS,
+    GREP_TOOL_DESCRIPTION,
+    GREP_TOOL_NAME,
+    GREP_TOOL_PARAMETERS,
+    READ_TOOL_DESCRIPTION,
+    READ_TOOL_NAME,
+    READ_TOOL_PARAMETERS,
     WRITE_TOOL_DESCRIPTION,
     WRITE_TOOL_NAME,
     WRITE_TOOL_PARAMETERS,
-    apply_write,
+    Toolbox,
+    worker_system,
 )
-from osf.planner import PLAN_SYSTEM, Exchange, ProposedPlan, build_messages, parse_plan
+from osf.planner import (
+    CLARIFY_SYSTEM,
+    ROUTE_SYSTEM,
+    Answer,
+    Decision,
+    Exchange,
+    ProposedPlan,
+    parse_decision,
+    parse_questions,
+    propose_with_retry,
+)
 from osf.runtime import AgentEvent, AgentResult
 from osf.types import ModelRef, SessionId, Workspace
 
@@ -30,6 +53,23 @@ DEFAULT_MODEL = ModelRef(
     provider_id="fireworks", model_id="accounts/fireworks/models/kimi-k2p7-code"
 )
 _MAX_STEPS = 12
+_KEY_VARS = ("FIREWORKS_API_KEY", "FIREWORKS")
+
+
+def api_key() -> str | None:
+    """The Fireworks key, if the environment (or a loaded `.env`) has one."""
+    for var in _KEY_VARS:
+        value = os.environ.get(var, "").strip()
+        if value:
+            return value
+    return None
+
+
+def require_api_key() -> str:
+    key = api_key()
+    if not key:
+        raise RuntimeError("set FIREWORKS_API_KEY (or FIREWORKS) in the environment or .env")
+    return key
 
 _TOOLS = [
     {
@@ -39,17 +79,63 @@ _TOOLS = [
             "description": WRITE_TOOL_DESCRIPTION,
             "parameters": WRITE_TOOL_PARAMETERS,
         },
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": READ_TOOL_NAME,
+            "description": READ_TOOL_DESCRIPTION,
+            "parameters": READ_TOOL_PARAMETERS,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": EDIT_TOOL_NAME,
+            "description": EDIT_TOOL_DESCRIPTION,
+            "parameters": EDIT_TOOL_PARAMETERS,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": GLOB_TOOL_NAME,
+            "description": GLOB_TOOL_DESCRIPTION,
+            "parameters": GLOB_TOOL_PARAMETERS,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": GREP_TOOL_NAME,
+            "description": GREP_TOOL_DESCRIPTION,
+            "parameters": GREP_TOOL_PARAMETERS,
+        },
+    },
 ]
+
+
+def make_client(client: object | None = None) -> object:
+    """The OpenAI-compatible client to call Fireworks with.
+
+    An injected client is used as-is, which is how the integration tests replay recorded responses
+    through a mock transport instead of spending credits.
+    """
+    if client is not None:
+        return client
+    from openai import OpenAI  # lazy: keeps the dependency optional
+
+    return OpenAI(base_url=BASE_URL, api_key=require_api_key())
 
 
 class FireworksRuntime:
     """Runs a single worker turn against a Fireworks-hosted model, writing into the workspace."""
 
-    def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
+    def __init__(self, model: ModelRef = DEFAULT_MODEL, *, client: object | None = None) -> None:
         if model.provider_id != "fireworks":
             raise ValueError(f"FireworksRuntime only serves the 'fireworks' provider, got {model}")
         self._model = model
+        self._client = client
         self._sessions: dict[SessionId, Workspace] = {}
         self._results: dict[SessionId, AgentResult] = {}
         self._counter = 0
@@ -75,16 +161,10 @@ class FireworksRuntime:
         return self._results[session]
 
     def _run_loop(self, workspace: Workspace, prompt: str) -> AgentResult:
-        import os
-
-        from openai import OpenAI  # lazy: keeps the dependency optional
-
-        api_key = os.environ.get("FIREWORKS_API_KEY") or os.environ.get("FIREWORKS")
-        if not api_key:
-            raise RuntimeError("set FIREWORKS_API_KEY (or FIREWORKS) in the environment or .env")
-        client = OpenAI(base_url=BASE_URL, api_key=api_key)
+        client = make_client(self._client)
+        toolbox = Toolbox(workspace)
         messages: list[dict] = [
-            {"role": "system", "content": WORKER_SYSTEM},
+            {"role": "system", "content": worker_system(workspace, model_id=self._model.model_id)},
             {"role": "user", "content": prompt},
         ]
         transcript: list[AgentEvent] = []
@@ -104,8 +184,8 @@ class FireworksRuntime:
 
             for call in message.tool_calls:
                 args = json.loads(call.function.arguments)
-                outcome, is_error = apply_write(workspace, args["path"], args["content"])
-                transcript.append(AgentEvent(kind="file.write", data={"path": args["path"]}))
+                outcome, is_error, kind = toolbox.dispatch(call.function.name, args)
+                transcript.append(AgentEvent(kind=kind, data={"path": args.get("path", "")}))
                 messages.append(
                     {"role": "tool", "tool_call_id": call.id, "content": outcome}
                 )
@@ -116,23 +196,47 @@ class FireworksRuntime:
 
 
 class FireworksPlanner:
-    """Proposes plans with the same model, as a plain completion — no tools, no workspace."""
+    """The driver agent: asks what it needs to know, then plans.
 
-    def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
+    Both are plain completions against the same Fireworks model the workers use — no tools, no
+    workspace — so planning is cheap next to a worker run.
+    """
+
+    def __init__(self, model: ModelRef = DEFAULT_MODEL, *, client: object | None = None) -> None:
         self._model = model
+        self._client = client
 
-    def propose(self, request: str, exchanges: Sequence[Exchange] = ()) -> ProposedPlan:
-        import os
+    def route(self, request: str, catalog: str = "", context: str = "") -> Decision:
+        system = "\n\n".join(part for part in (ROUTE_SYSTEM, catalog, context) if part)
+        return parse_decision(self._complete(system, [{"role": "user", "content": request}], 500))
 
-        from openai import OpenAI  # lazy: keeps the dependency optional
+    def clarify(self, request: str, context: str = "") -> list[str]:
+        system = f"{CLARIFY_SYSTEM}\n\n{context}" if context else CLARIFY_SYSTEM
+        return parse_questions(self._complete(system, [{"role": "user", "content": request}], 500))
 
-        api_key = os.environ.get("FIREWORKS_API_KEY") or os.environ.get("FIREWORKS")
-        if not api_key:
-            raise RuntimeError("set FIREWORKS_API_KEY (or FIREWORKS) in the environment or .env")
-        client = OpenAI(base_url=BASE_URL, api_key=api_key)
-        messages = [{"role": "system", "content": PLAN_SYSTEM}]
-        messages.extend(build_messages(request, exchanges))
-        response = client.chat.completions.create(
-            model=self._model.model_id, messages=messages, max_tokens=2000
+    def propose(
+        self,
+        request: str,
+        exchanges: Sequence[Exchange] = (),
+        answers: Sequence[Answer] = (),
+        *,
+        shared_workspace: bool = False,
+        context: str = "",
+    ) -> ProposedPlan:
+        return propose_with_retry(
+            self._complete,
+            request,
+            exchanges,
+            answers,
+            shared_workspace=shared_workspace,
+            context=context,
         )
-        return parse_plan(response.choices[0].message.content or "", fallback_goal=request)
+
+    def _complete(self, system: str, messages: list[dict], max_tokens: int) -> str:
+        client = make_client(self._client)
+        response = client.chat.completions.create(
+            model=self._model.model_id,
+            messages=[{"role": "system", "content": system}, *messages],
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content or ""

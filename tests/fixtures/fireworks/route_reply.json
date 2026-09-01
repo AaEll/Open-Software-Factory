@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-b6af0192bf334aebb34a3e9b88612bc8",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"action\": \"reply\", \"message\": \"Hi there! I'm the driver of an autonomous software factory. I can help you build, scaffold, and improve software projects. What would you like to build today?\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "The user said \"hi bot\" which is a greeting. I should reply with a greeting, maybe mention what I can do, and offer to build something. Since this is a greeting, I should use action \"reply\".",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1788128548,
+  "model": "accounts/fireworks/models/kimi-k2p7-code",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 91,
+    "prompt_tokens": 248,
+    "total_tokens": 339,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 45,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "compute_units": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 45
+    }
+  }
+}

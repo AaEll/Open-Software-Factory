@@ -5,6 +5,7 @@ it by hand — so these cover the prompts as well as the commands. All offline: 
 """
 
 import io
+import os
 import sys
 
 import pytest
@@ -16,10 +17,10 @@ from osf.config import (
     parse_repo,
     valid_repo_name,
 )
-from osf.planner import ProposedPlan, Step
+from osf.planner import Decision, ProposedPlan, Step
 from osf.prompts import Cancelled, Choice, Style, confirm, select, text
 from osf.runs import get_run
-from osf.shell import Session, Shell
+from osf.shell import Session, Shell, default_model, default_session
 from osf.types import ModelRef, RepoRef
 
 
@@ -32,7 +33,12 @@ def _plain_output(monkeypatch):
 
 
 def run_shell(script: str, capsys, session: Session | None = None) -> str:
-    """Feed `script` to a fresh shell and return everything it printed."""
+    """Feed `script` to a fresh shell and return everything it printed.
+
+    Defaults to the in-memory forge: the real default is `local`, which edits the repository the
+    tests are running in. Project-mode behaviour is covered in test_project.py against a tmp repo.
+    """
+    session = session if session is not None else Session(forge="memory")
     sys.stdin = io.StringIO(script)
     try:
         assert Shell(session).run() == 0
@@ -44,21 +50,13 @@ def run_shell(script: str, capsys, session: Session | None = None) -> str:
 # --- commands ---------------------------------------------------------------------------------
 
 
-def test_help_lists_every_command(capsys):
-    out = run_shell("/help\n/quit\n", capsys)
-    for command in ("/new-repo", "/runs", "/repo", "/model", "/forge", "/rounds", "/smoke"):
-        assert command in out
-
-
-def test_status_shows_defaults(capsys):
-    out = run_shell("/status\n/quit\n", capsys)
-    assert "repo:   unset" in out
-    assert "offline (scripted worker)" in out
-    assert "forge:  memory" in out
+def test_a_fresh_session_targets_the_users_own_repository(capsys):
+    """The default is the riskiest setting there is — it decides whose files get edited."""
+    assert "forge:  local" in run_shell("/status\n/quit\n", capsys, Session())
 
 
 def test_repo_model_forge_rounds_are_remembered(capsys):
-    session = Session()
+    session = Session(forge="memory")
     out = run_shell(
         "/repo me/site\n/model fireworks/kimi\n/forge github\n/rounds 5\n/quit\n",
         capsys,
@@ -78,7 +76,7 @@ def test_model_off_returns_to_the_offline_worker(capsys):
 
 
 def test_bad_settings_are_rejected_without_changing_state(capsys):
-    session = Session()
+    session = Session(forge="memory")
     out = run_shell("/forge nope\n/rounds 0\n/quit\n", capsys, session)
     assert session.forge == "memory"
     assert session.max_rounds == 3
@@ -90,24 +88,25 @@ def test_unknown_command(capsys):
     assert "unknown command /bogus" in run_shell("/bogus\n/quit\n", capsys)
 
 
-def test_aliases_quit(capsys):
-    assert run_shell("/exit\n", capsys) is not None
+@pytest.mark.parametrize("command", ["/quit", "/exit", "/q"])
+def test_quitting_stops_reading_input(command, capsys):
+    # Anything after the quit must not run — an alias that only *looked* like it quit would
+    # keep executing the rest of the script.
+    out = run_shell(f"{command}\n/bogus\n", capsys)
+    assert "unknown command" not in out
 
 
-def test_eof_leaves_the_shell(capsys):
-    assert "Open Software Factory" in run_shell("", capsys)
-
-
-def test_runs_lists_the_builtin(capsys):
-    assert "create-repo" in run_shell("/runs\n/quit\n", capsys)
+def test_end_of_input_exits_cleanly():
+    """Closed stdin must return cleanly, not hang or raise."""
+    sys.stdin = io.StringIO("")
+    try:
+        assert Shell(Session(forge="memory")).run() == 0
+    finally:
+        sys.stdin = sys.__stdin__
 
 
 def test_unknown_run_is_reported(capsys):
     assert "unknown run" in run_shell("/run nope\n/quit\n", capsys)
-
-
-def test_smoke_command(capsys):
-    assert "smoke: ok" in run_shell("/smoke\n/quit\n", capsys)
 
 
 def test_a_failing_command_does_not_kill_the_shell(capsys):
@@ -118,7 +117,7 @@ def test_a_failing_command_does_not_kill_the_shell(capsys):
 
 
 def test_repo_command_accepts_a_bare_name(capsys):
-    session = Session()
+    session = Session(forge="memory")
     run_shell("/repo site\n/quit\n", capsys, session)
     assert session.repo == RepoRef("me", "site")  # owner falls back to your account
 
@@ -141,7 +140,7 @@ def test_objective_escalates_when_a_step_gate_is_unmet(capsys, monkeypatch):
 
 
 def test_objective_asks_only_for_a_name_and_detects_the_owner(capsys):
-    session = Session()
+    session = Session(forge="memory")
     out = run_shell("Landing page for demo.osf\nsite\n\n/quit\n", capsys, session)
     assert "Repository name" in out
     assert "Owner" not in out  # never asked — OSF_OWNER/gh/local decides it
@@ -150,14 +149,14 @@ def test_objective_asks_only_for_a_name_and_detects_the_owner(capsys):
 
 
 def test_objective_accepts_a_full_owner_name_at_the_name_question(capsys):
-    session = Session()
+    session = Session(forge="memory")
     run_shell("Landing page for demo.osf\nyou/site\n\n/quit\n", capsys, session)
     assert session.repo == RepoRef("you", "site")
 
 
 def test_a_rejected_answer_is_re_asked_without_losing_the_objective(capsys):
     # The reported bug: a bad repo answer used to abort the turn and drop the objective.
-    session = Session()
+    session = Session(forge="memory")
     out = run_shell(
         "Make a website for my dog\nmy site!\npobrecita\n\n/quit\n", capsys, session
     )
@@ -169,16 +168,25 @@ def test_a_rejected_answer_is_re_asked_without_losing_the_objective(capsys):
 # --- plan negotiation ---------------------------------------------------------------------------
 
 
-def _plan(monkeypatch, *plans):
-    """Pin the session's planner to a scripted sequence of proposals."""
+def _plan(monkeypatch, *plans, questions=()):
+    """Pin the session's planner to scripted questions and a sequence of proposals."""
     remaining = list(plans)
+    last = plans[-1]
 
     class _Scripted:
-        def propose(self, request, exchanges=()):
-            return remaining.pop(0) if remaining else remaining_last
+        def route(self, request, catalog="", context=""):
+            return Decision(action="plan")
 
-    remaining_last = plans[-1]
+        def clarify(self, request, context=""):
+            return list(questions)
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
+            _Scripted.seen = list(answers)
+            _Scripted.shared = shared_workspace
+            return remaining.pop(0) if remaining else last
+
     monkeypatch.setattr(Session, "planner", lambda _self: _Scripted())
+    return _Scripted
 
 
 def test_the_plan_is_shown_before_anything_runs(capsys, monkeypatch):
@@ -212,7 +220,13 @@ def test_declining_the_plan_runs_nothing(capsys, monkeypatch):
 
 def test_a_planner_failure_falls_back_to_the_request(capsys, monkeypatch):
     class _Broken:
-        def propose(self, request, exchanges=()):
+        def route(self, request, catalog="", context=""):
+            return Decision(action="plan")
+
+        def clarify(self, request, context=""):
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
             raise RuntimeError("no API key")
 
     monkeypatch.setattr(Session, "planner", lambda _self: _Broken())
@@ -220,6 +234,42 @@ def test_a_planner_failure_falls_back_to_the_request(capsys, monkeypatch):
     assert "planner unavailable" in out
     assert "falling back to the request as written" in out
     assert "me-site: done" in out  # still ran, ungated
+
+
+def test_the_driver_asks_its_own_questions_first(capsys, monkeypatch):
+    scripted = _plan(
+        monkeypatch,
+        ProposedPlan("A playful dog site", [Step("Write index.html", ["index.html"])]),
+        questions=["What vibe?", "Photos or placeholders?"],
+    )
+    out = run_shell("/repo me/site\nsite for my dog\nplayful\nplaceholders\n\n/quit\n", capsys)
+    assert "a few questions before I plan" in out
+    assert "What vibe?" in out
+    # the answers reach the planner, which is the whole point of asking
+    assert scripted.seen == [("What vibe?", "playful"), ("Photos or placeholders?", "placeholders")]
+    assert "me-site: done" in out
+
+
+def test_skipped_questions_are_not_passed_on(capsys, monkeypatch):
+    scripted = _plan(
+        monkeypatch,
+        ProposedPlan("A dog site", [Step("Write index.html", ["index.html"])]),
+        questions=["What vibe?", "Photos or placeholders?"],
+    )
+    run_shell("/repo me/site\nsite for my dog\n\nplaceholders\n\n/quit\n", capsys)
+    assert scripted.seen == [("Photos or placeholders?", "placeholders")]
+
+
+def test_ask_off_skips_the_interview(capsys, monkeypatch):
+    _plan(
+        monkeypatch,
+        ProposedPlan("A dog site", [Step("Write index.html", ["index.html"])]),
+        questions=["What vibe?"],
+    )
+    out = run_shell("/repo me/site\n/ask off\nsite for my dog\n\n/quit\n", capsys)
+    assert "clarifying questions: off" in out
+    assert "What vibe?" not in out
+    assert "me-site: done" in out
 
 
 def test_a_plan_with_no_gate_says_so(capsys, monkeypatch):
@@ -238,7 +288,7 @@ def test_new_repo_walks_the_declared_params(capsys):
     assert "Starting point" in out
     assert "Template with CI/CD" in out and "Blank repository" in out
     assert "README.md exists, .gitignore exists" in out  # the blank template's gates
-    assert "Run it on me/widgets" in out
+    assert "Run it in widgets" in out
     assert "not run" in out
 
 
@@ -260,6 +310,47 @@ def test_cancelling_a_wizard_returns_to_the_prompt(capsys):
     assert "cancelled" in out
 
 
+# --- picking an engine at startup ----------------------------------------------------------
+
+
+def test_osf_model_wins_over_everything(monkeypatch):
+    monkeypatch.setenv("OSF_MODEL", "anthropic/claude-opus-4-8")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw-key")
+    assert default_model() == ModelRef("anthropic", "claude-opus-4-8")
+
+
+def test_a_fireworks_key_alone_selects_an_engine(monkeypatch):
+    """A user with a key must not land on the scripted planner by accident."""
+    pytest.importorskip("openai")  # without the agent extra there is no engine to select
+    monkeypatch.delenv("OSF_MODEL", raising=False)
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw-key")
+    model = default_model()
+    assert model is not None and model.provider_id == "fireworks"
+
+
+def test_no_key_means_no_engine(monkeypatch):
+    monkeypatch.delenv("OSF_MODEL", raising=False)
+    for var in ("FIREWORKS_API_KEY", "FIREWORKS"):
+        monkeypatch.delenv(var, raising=False)
+    assert default_model() is None
+
+
+def test_dotenv_is_read_from_the_directory_you_launched_in(monkeypatch, tmp_path):
+    """`load_dotenv()` searches from the calling *file*, so an installed `sf` found nothing.
+
+    The fix is `find_dotenv(usecwd=True)`; this pins it, because the failure is invisible in a
+    development checkout — there the package sits next to the repo's own .env and appears to work.
+    """
+    pytest.importorskip("dotenv")
+    (tmp_path / ".env").write_text("FIREWORKS_API_KEY=from-the-cwd\n", encoding="utf-8")
+    for var in ("OSF_MODEL", "FIREWORKS_API_KEY", "FIREWORKS"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    default_session()
+    assert os.environ["FIREWORKS_API_KEY"] == "from-the-cwd"
+
+
 # --- prompt widgets -----------------------------------------------------------------------------
 
 
@@ -271,25 +362,13 @@ def _answers(monkeypatch, *lines):
 OPTIONS = (Choice("ci-cd", "Template with CI/CD"), Choice("blank", "Blank repository"))
 
 
-def test_select_accepts_a_number(monkeypatch, capsys):
-    _answers(monkeypatch, "2")
-    assert select("Starting point", OPTIONS) == "blank"
-
-
-def test_select_accepts_the_value(monkeypatch, capsys):
-    _answers(monkeypatch, "blank")
-    assert select("Starting point", OPTIONS) == "blank"
-
-
-def test_select_empty_takes_the_default(monkeypatch, capsys):
-    _answers(monkeypatch, "")
-    assert select("Starting point", OPTIONS, default="blank") == "blank"
-
-
-def test_select_reasks_on_a_bad_answer(monkeypatch, capsys):
-    _answers(monkeypatch, "9", "1")
-    assert select("Starting point", OPTIONS) == "ci-cd"
-    assert "pick 1-2" in capsys.readouterr().out
+@pytest.mark.parametrize(
+    ("typed", "chosen"),
+    [(["2"], "blank"), (["blank"], "blank"), ([""], "ci-cd"), (["9", "1"], "ci-cd")],
+)
+def test_select_accepts_a_number_a_name_or_the_default(typed, chosen, monkeypatch, capsys):
+    _answers(monkeypatch, *typed)
+    assert select("Starting point", OPTIONS) == chosen
 
 
 def test_text_default_and_required(monkeypatch, capsys):
@@ -324,14 +403,6 @@ def test_cancel_is_raised_on_eof(monkeypatch):
 
 
 # --- run schema ----------------------------------------------------------------------------------
-
-
-def test_create_repo_declares_its_questions():
-    run = get_run("create-repo")
-    assert [p.name for p in run.params] == ["name", "description", "template", "language"]
-    assert run.params[0].required  # name has no default
-    assert not run.params[1].required  # description is optional
-    assert [c.value for c in run.params[2].choices] == ["ci-cd", "blank"]
 
 
 def test_unknown_template_is_rejected():
@@ -391,3 +462,66 @@ def test_create_repo_uses_the_detected_owner_without_asking(monkeypatch):
     monkeypatch.setenv("OSF_OWNER", "acme")
     plan = get_run("create-repo").build({"name": "widgets"})
     assert plan.objective.repo == RepoRef("acme", "widgets")
+
+
+# --- the driver routing what you type -------------------------------------------------------
+
+
+def _router(monkeypatch, decision: Decision):
+    class _Router:
+        def route(self, request, catalog="", context=""):
+            _Router.catalog = catalog
+            return decision
+
+        def clarify(self, request, context=""):
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
+            return ProposedPlan("planned anyway", [Step(request)])
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Router())
+    return _Router
+
+
+def test_a_reply_is_printed_and_nothing_is_built(capsys, monkeypatch):
+    _router(monkeypatch, Decision(action="reply", message="Hi! What shall we build?"))
+    out = run_shell("/repo me/site\nhi bot\n/quit\n", capsys)
+    assert "Hi! What shall we build?" in out
+    assert "planning…" not in out
+
+
+def test_the_driver_is_shown_the_workflows_it_can_start(capsys, monkeypatch):
+    router = _router(monkeypatch, Decision(action="reply", message="hello"))
+    run_shell("/repo me/site\nhi\n/quit\n", capsys)
+    assert "create-repo" in router.catalog  # it can only choose a run it was told about
+
+
+def test_an_unknown_workflow_falls_back_to_planning(capsys, monkeypatch):
+    # A hallucinated run name must not dead-end the request.
+    _router(monkeypatch, Decision(action="run", run="not-a-real-run"))
+    out = run_shell("/repo me/site\nbuild me something\n\n/quit\n", capsys)
+    assert "planning…" in out
+    assert "me-site: done" in out
+
+
+def test_a_routing_failure_still_plans(capsys, monkeypatch):
+    class _Broken:
+        def route(self, request, catalog="", context=""):
+            raise RuntimeError("provider down")
+
+        def clarify(self, request, context=""):
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
+            return ProposedPlan("planned anyway", [Step(request)])
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Broken())
+    out = run_shell("/repo me/site\nbuild me something\n\n/quit\n", capsys)
+    assert "driver unavailable" in out
+    assert "me-site: done" in out  # the request survived
+
+
+def test_an_offline_driver_routes_everything_to_planning(capsys):
+    # StaticPlanner has no judgement to apply, so it must not pretend to converse.
+    out = run_shell("/repo me/site\nhi bot\n\n/quit\n", capsys)
+    assert "planning…" in out

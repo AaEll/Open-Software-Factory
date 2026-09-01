@@ -7,14 +7,19 @@ but the parameter shape and the actual write live here so behavior stays identic
 
 from __future__ import annotations
 
+import re
+import subprocess
+from fnmatch import fnmatch
 from pathlib import Path
 
+from osf.instructions import load as load_instructions
 from osf.types import Workspace
 
 WRITE_TOOL_NAME = "write_file"
 WRITE_TOOL_DESCRIPTION = (
-    "Create or overwrite a file in the project workspace. Paths are relative to the workspace "
-    "root; parent directories are created as needed."
+    "Create a new file, or replace an existing one wholesale. Paths are relative to the workspace "
+    "root; parent directories are created as needed. To change part of a file that already "
+    "exists, use edit_file instead — this replaces the whole thing."
 )
 WRITE_TOOL_PARAMETERS = {
     "type": "object",
@@ -26,11 +31,171 @@ WRITE_TOOL_PARAMETERS = {
     "additionalProperties": False,
 }
 
+GLOB_TOOL_NAME = "find_files"
+GLOB_TOOL_DESCRIPTION = (
+    "Find files whose path matches a glob, e.g. `*.py`, `src/**/*.ts`, `test_*.py`. Use this to "
+    "look beyond the files listed for you — the listing is a starting point, not the whole project."
+)
+GLOB_TOOL_PARAMETERS = {
+    "type": "object",
+    "properties": {"pattern": {"type": "string", "description": "Glob pattern, e.g. src/**/*.py"}},
+    "required": ["pattern"],
+    "additionalProperties": False,
+}
+
+GREP_TOOL_NAME = "search_files"
+GREP_TOOL_DESCRIPTION = (
+    "Search file contents for a regular expression and return matching lines with their paths and "
+    "line numbers. Use it to find where something is defined or used before changing it."
+)
+GREP_TOOL_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "pattern": {"type": "string", "description": "Regular expression to search for"},
+        "glob": {
+            "type": "string",
+            "description": "Optional path glob to limit the search, e.g. *.py",
+        },
+    },
+    "required": ["pattern"],
+    "additionalProperties": False,
+}
+
+EDIT_TOOL_NAME = "edit_file"
+EDIT_TOOL_DESCRIPTION = (
+    "Change part of an existing file by replacing an exact string. This is how you modify a file: "
+    "it leaves everything you did not name untouched. `old_string` must appear exactly once "
+    "unless replace_all is set."
+)
+EDIT_TOOL_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Relative file path"},
+        "old_string": {
+            "type": "string",
+            "description": "Exact text to replace, including indentation",
+        },
+        "new_string": {"type": "string", "description": "Text to put in its place"},
+        "replace_all": {
+            "type": "boolean",
+            "description": "Replace every occurrence (default false)",
+        },
+    },
+    "required": ["path", "old_string", "new_string"],
+    "additionalProperties": False,
+}
+
+READ_TOOL_NAME = "read_file"
+READ_TOOL_DESCRIPTION = (
+    "Read a file from the project workspace. Use this before changing an existing file, so you "
+    "keep what should stay."
+)
+READ_TOOL_PARAMETERS = {
+    "type": "object",
+    "properties": {"path": {"type": "string", "description": "Relative file path"}},
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
 WORKER_SYSTEM = (
     "You are a worker agent in an autonomous software factory. You implement the requested change "
-    "by writing files with the write_file tool, then stop. Keep the implementation simple and "
-    "self-contained. Do not ask questions or explain at length — just build it."
+    "with the file tools, then stop. Keep the implementation simple and self-contained. Do not ask "
+    "questions or explain at length — just build it.\n"
+    "You are already inside the project's root directory. Write paths relative to it — "
+    "`README.md`, `src/app.py` — and never create a folder named after the project itself; that "
+    "buries the work one level down, where nothing will find it.\n"
+    "Use edit_file to change a file that already exists: it replaces one exact string and leaves "
+    "the rest alone. write_file replaces the entire file, so reach for it only to create something "
+    "new. Change what was asked for and leave the rest of the project as you found it — an "
+    "unrequested rewrite is a worse outcome than a small change."
 )
+
+# Model-specific guidance. opencode ships a whole prompt per model family; the same idea at our
+# scale is a short overlay on the shared instructions, dispatched on the model id. This is our own
+# wording — it keeps the behaviours that matter for a *worker* (act with tools, batch them, follow
+# the schemas) and drops the ones that assume an interactive session, because our worker has no
+# user to ask and no shell to run.
+KIMI_GUIDANCE = (
+    "Act with the tools rather than describing what you would do — a plan in prose changes "
+    "nothing on disk, and nobody reads your commentary.\n"
+    "Issue tool calls in parallel when they do not depend on each other; reading three files takes "
+    "one step, not three.\n"
+    "Follow each tool's parameter schema exactly. A rejected call costs a whole round trip.\n"
+    "You cannot ask anyone anything: there is no user reading this and no shell to run. If a "
+    "detail is unspecified, choose the ordinary answer and continue, and note it in a file if it "
+    "matters. Stop as soon as the requested change is complete."
+)
+
+MODEL_GUIDANCE = (("kimi", KIMI_GUIDANCE),)
+
+
+def guidance_for(model_id: str | None) -> str:
+    """Extra instructions for the model family we are talking to, if we have any."""
+    lowered = (model_id or "").lower()
+    for marker, text in MODEL_GUIDANCE:
+        if marker in lowered:
+            return text
+    return ""
+
+
+# Bounds on search results. A worker that asks a broad question should get a usable answer, not a
+# transcript of the repository.
+GLOB_LIMIT = 100
+GREP_LIMIT = 50
+GREP_LINE_LIMIT = 200
+
+# How many entries of the project to show. Enough to orient in a small repo, short enough not to
+# crowd out the actual request in the prompt.
+LISTING_LIMIT = 40
+
+
+def workspace_listing(workspace: Workspace, *, limit: int = LISTING_LIMIT) -> list[str]:
+    """The files already in the workspace, as the worker would refer to them.
+
+    Uses git's own view when there is one, so ignored junk (`node_modules/`, `.env`) stays out of
+    the prompt; falls back to a plain walk for a directory git doesn't know about yet.
+    """
+    root = Path(workspace.path)
+    result = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        paths = [line for line in result.stdout.splitlines() if line]
+    else:
+        paths = [
+            str(path.relative_to(root))
+            for path in sorted(root.rglob("*"))
+            if path.is_file() and ".git" not in path.parts
+        ]
+    return sorted(paths)[:limit]
+
+
+def worker_system(workspace: Workspace, *, model_id: str | None = None) -> str:
+    """The worker prompt: shared instructions, model guidance, where it is, and house rules."""
+    listing = workspace_listing(workspace)
+    if listing:
+        contents = "It already contains:\n" + "\n".join(f"- {path}" for path in listing)
+        contents += (
+            "\nRead any of these you are about to change. This list is a starting point and may "
+            "be incomplete — use find_files or search_files to look for anything else."
+        )
+    else:
+        contents = "It is empty."
+
+    # Ordered stable-first: the shared instructions and model guidance never change, the project's
+    # conventions change rarely, and the listing changes the moment the agent writes a file. Both
+    # reference harnesses treat the prompt prefix as something to keep still; this is the cheap
+    # half of that, and it costs nothing to get right now.
+    parts = [
+        WORKER_SYSTEM,
+        guidance_for(model_id),
+        load_instructions(workspace.path).render(),
+        f"Your working directory is {workspace.path}. {contents}",
+    ]
+    return "\n\n".join(part for part in parts if part)
 
 
 def apply_write(workspace: Workspace, rel_path: str, content: str) -> tuple[str, bool]:
@@ -42,3 +207,209 @@ def apply_write(workspace: Workspace, rel_path: str, content: str) -> tuple[str,
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return f"Wrote {rel_path} ({len(content)} bytes)", False
+
+
+def apply_read(workspace: Workspace, rel_path: str) -> tuple[str, bool]:
+    """Read ``rel_path`` from inside the workspace. Returns (content or message, is_error)."""
+    root = Path(workspace.path).resolve()
+    target = (root / rel_path).resolve()
+    if root not in target.parents and target != root:
+        return f"Refused: {rel_path} escapes the workspace", True
+    if not target.is_file():
+        return f"{rel_path} does not exist", True
+    try:
+        return target.read_text(encoding="utf-8"), False
+    except UnicodeDecodeError:
+        return f"{rel_path} is not a text file", True
+
+
+def apply_edit(
+    workspace: Workspace, rel_path: str, old: str, new: str, *, replace_all: bool = False
+) -> tuple[str, bool]:
+    """Replace an exact string inside a file. Returns (message, is_error).
+
+    Ambiguity is refused rather than guessed at: a match that appears twice could mean either
+    place, and picking one silently is how an agent corrupts a file it was asked to improve.
+    """
+    if not old:
+        return ("old_string must not be empty. Use write_file to create a new file.", True)
+    if old == new:
+        return ("old_string and new_string are identical, so there is nothing to change.", True)
+
+    existing, failed = apply_read(workspace, rel_path)
+    if failed:
+        return existing, True
+
+    occurrences = existing.count(old)
+    if occurrences == 0:
+        return (
+            f"old_string does not appear in {rel_path}. It must match exactly, including "
+            "whitespace and indentation. Read the file again and copy the text you mean.",
+            True,
+        )
+    if occurrences > 1 and not replace_all:
+        return (
+            f"old_string appears {occurrences} times in {rel_path}. Include more surrounding "
+            "text so it matches once, or set replace_all to true.",
+            True,
+        )
+
+    updated = existing.replace(old, new) if replace_all else existing.replace(old, new, 1)
+    Path(workspace.path, rel_path).write_text(updated, encoding="utf-8")
+    return (f"Replaced {occurrences if replace_all else 1} occurrence(s) in {rel_path}", False)
+
+
+def is_ignored(workspace: Workspace, rel_path: str) -> bool:
+    """Whether git would ignore this path — and therefore whether it is the project's business.
+
+    Ignored paths are where secrets and machine-local junk live: `.env`, credentials, build output.
+    They are excluded from the listing already; this is what stops an agent that guesses a name
+    from reading one anyway.
+    """
+    if rel_path == ".git" or rel_path.startswith(".git/") or "/.git/" in rel_path:
+        return True
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", "--", rel_path],
+        cwd=workspace.path,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+class Toolbox:
+    """The tools for one worker session, and the policy that governs them.
+
+    Two rules hold regardless of what the prompt says, because a prompt is advice:
+
+    * **Read before overwrite.** `write_file` may create anything, but it may only replace a file
+      the session has already read — an agent that has not read a file cannot know what it is
+      destroying.
+    * **Ignored paths are out of bounds.** Anything git ignores, and `.git/` itself, is refused for
+      both reading and writing. That is where `.env` and credentials live, and "the agent did not
+      think to try" is not a control.
+
+    `allow_ignored=True` lifts the second rule for a caller that means it.
+    """
+
+    def __init__(self, workspace: Workspace, *, allow_ignored: bool = False) -> None:
+        self.workspace = workspace
+        self.allow_ignored = allow_ignored
+        self.seen: set[str] = set()
+
+    def dispatch(self, name: str, args: dict) -> tuple[str, bool, str]:
+        """Run one tool call. Returns (message for the model, is_error, transcript event kind)."""
+        path = args.get("path", "")
+        if path and not self.allow_ignored and is_ignored(self.workspace, path):
+            return (
+                f"{path} is outside the project: git ignores it, so it holds secrets or machine "
+                "state rather than code. Work with the tracked files instead.",
+                True,
+                "file.refused",
+            )
+        if name == READ_TOOL_NAME:
+            message, failed = apply_read(self.workspace, path)
+            if not failed:
+                self.seen.add(path)
+            return message, failed, "file.read"
+        if name == EDIT_TOOL_NAME:
+            message, failed = apply_edit(
+                self.workspace,
+                path,
+                args.get("old_string", ""),
+                args.get("new_string", ""),
+                replace_all=bool(args.get("replace_all")),
+            )
+            if not failed:
+                self.seen.add(path)
+            return message, failed, "file.edit"
+        if name == GLOB_TOOL_NAME:
+            message, failed = apply_glob(self.workspace, args.get("pattern", ""))
+            return message, failed, "file.search"
+        if name == GREP_TOOL_NAME:
+            message, failed = apply_grep(
+                self.workspace, args.get("pattern", ""), args.get("glob", "")
+            )
+            return message, failed, "file.search"
+        if name == WRITE_TOOL_NAME:
+            if Path(self.workspace.path, path).is_file() and path not in self.seen:
+                return (
+                    f"{path} already exists and you have not read it. Overwriting it would throw "
+                    "away whatever is in it. read_file it first, then edit_file the part you mean "
+                    "to change.",
+                    True,
+                    "file.refused",
+                )
+            message, failed = apply_write(self.workspace, path, args.get("content", ""))
+            if not failed:
+                self.seen.add(path)
+            return message, failed, "file.write"
+        return f"Unknown tool {name}", True, "error"
+
+
+def tracked_files(workspace: Workspace) -> list[str]:
+    """Every file git would show, ignored paths excluded — the search universe."""
+    result = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+        cwd=workspace.path,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return [line for line in result.stdout.splitlines() if line]
+    root = Path(workspace.path)
+    return [
+        str(path.relative_to(root))
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and ".git" not in path.parts
+    ]
+
+
+def apply_glob(workspace: Workspace, pattern: str) -> tuple[str, bool]:
+    """Find tracked files whose path matches `pattern`."""
+    if not pattern:
+        return "pattern must not be empty", True
+    paths = tracked_files(workspace)
+    # `**/` should also match at the root, which fnmatch does not do on its own.
+    matched = [
+        path
+        for path in paths
+        if fnmatch(path, pattern)
+        or fnmatch(path, pattern.replace("**/", "", 1))
+        or fnmatch(Path(path).name, pattern)
+    ]
+    if not matched:
+        return f"No files match {pattern}", False
+    shown = matched[:GLOB_LIMIT]
+    listing = "\n".join(shown)
+    if len(matched) > GLOB_LIMIT:
+        listing += f"\n… and {len(matched) - GLOB_LIMIT} more"
+    return listing, False
+
+
+def apply_grep(workspace: Workspace, pattern: str, glob: str = "") -> tuple[str, bool]:
+    """Search tracked file contents for a regular expression."""
+    if not pattern:
+        return "pattern must not be empty", True
+    try:
+        expression = re.compile(pattern)
+    except re.error as exc:
+        return f"{pattern} is not a valid regular expression ({exc})", True
+
+    root = Path(workspace.path)
+    hits: list[str] = []
+    for path in tracked_files(workspace):
+        if glob and not (fnmatch(path, glob) or fnmatch(Path(path).name, glob)):
+            continue
+        try:
+            content = (root / path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue  # binary or unreadable: not what a text search is for
+        for number, line in enumerate(content.splitlines(), start=1):
+            if expression.search(line):
+                hits.append(f"{path}:{number}: {line.strip()[:GREP_LINE_LIMIT]}")
+                if len(hits) >= GREP_LIMIT:
+                    return "\n".join(hits) + f"\n… stopped at {GREP_LIMIT} matches", False
+    if not hits:
+        return f"No matches for {pattern}", False
+    return "\n".join(hits), False

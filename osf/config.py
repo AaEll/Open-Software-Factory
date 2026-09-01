@@ -25,6 +25,31 @@ _GH_USER = re.compile(r"^\s+user:\s*(\S+)\s*$", re.MULTILINE)
 
 LOCAL_OWNER = "local"  # stands in when no forge account is known; a local git repo needs none
 
+# Keys belong to the user, not to a checkout. `sf` is meant to be run in any project, so it reads a
+# global config as well as a project-local `.env` — the same idea as `gh`'s hosts.yml.
+CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "osf"
+CONFIG_ENV = CONFIG_HOME / "env"
+
+
+def load_env() -> list[Path]:
+    """Load `.env` from the working directory and the user's global config. Returns what it read.
+
+    The project's own `.env` wins: a repository may deliberately pin a different model or key.
+    Neither file overrides something already exported in the environment.
+    """
+    try:
+        from dotenv import find_dotenv, load_dotenv
+    except ImportError:
+        return []
+    loaded = []
+    # usecwd: search up from where the user launched `sf`, not from this file — an installed
+    # package would otherwise look beside itself in site-packages and find nothing.
+    for path in (find_dotenv(usecwd=True), CONFIG_ENV):
+        if path and Path(path).is_file():
+            load_dotenv(path)
+            loaded.append(Path(path))
+    return loaded
+
 
 def detected_owner() -> str | None:
     """The user's forge account, if we can tell without asking: env vars, then the `gh` CLI's.

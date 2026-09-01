@@ -29,4 +29,13 @@ class IsolationBackend(Protocol):
 
     async def exec(self, ws: Workspace, cmd: list[str]) -> ExecResult: ...
 
+    async def checkpoint(self, ws: Workspace, message: str) -> None:
+        """Record the work done so far.
+
+        What that means is the backend's business: a throwaway workspace commits, the user's own
+        repository takes a snapshot instead — writing to someone's history is not a detail the
+        driver should decide.
+        """
+        ...
+
     async def cleanup(self, ws: Workspace) -> None: ...

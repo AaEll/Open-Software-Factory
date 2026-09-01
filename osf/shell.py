@@ -15,21 +15,42 @@ commands drives it identically (which is how the tests run).
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
-from osf.config import default_owner, detected_owner, parse_repo, valid_repo_name
+from osf.config import (
+    CONFIG_ENV,
+    default_owner,
+    detected_owner,
+    load_env,
+    parse_repo,
+    valid_repo_name,
+)
 from osf.driver import Driver, ObjectiveOutcome
+from osf.engines._tools import tracked_files, workspace_listing
 from osf.forge import Forge
-from osf.local.forge import InMemoryForge
+from osf.instructions import load as load_instructions
+from osf.isolation import IsolationBackend
+from osf.local.forge import InMemoryForge, NoForge
 from osf.local.isolation import TempdirIsolation
-from osf.planner import Exchange, Planner, ProposedPlan, StaticPlanner
+from osf.local.project import ProjectIsolation, git_init, repo_root
+from osf.planner import (
+    Answer,
+    Decision,
+    Exchange,
+    Planner,
+    ProposedPlan,
+    StaticPlanner,
+    route_catalog,
+)
 from osf.prompts import STYLE, Cancelled, Choice, confirm, select, text
 from osf.review import AcceptanceReviewer, PlanReviewer
 from osf.runs import PrepackagedRun, all_runs, execute, get_run
 from osf.runtime import AgentRuntime
-from osf.types import ModelRef, RepoRef
+from osf.types import ModelRef, RepoRef, Workspace
 
 BANNER = "Open Software Factory"
 
@@ -38,10 +59,12 @@ BANNER = "Open Software Factory"
 class Session:
     """What the shell remembers between turns."""
 
+    project: Path | None = None  # the repository `sf` edits; None until resolved from the cwd
     repo: RepoRef | None = None
     model: ModelRef | None = None  # None -> the offline scripted worker
-    forge: str = "memory"  # "memory" | "github" | "github-org"
+    forge: str = "local"  # "local" | "memory" | "github" | "github-org"
     max_rounds: int = 3
+    ask: bool = True  # let the driver ask clarifying questions before planning
 
     @property
     def engine(self) -> str:
@@ -64,11 +87,19 @@ class Session:
         return resolve_planner(self.model)
 
     def make_forge(self) -> Forge:
+        if self.forge == "local":
+            return NoForge()
         if self.forge == "memory":
             return InMemoryForge()
         from osf.forges.github import GitHubForge
 
         return GitHubForge(org=self.forge == "github-org")
+
+    def isolation(self) -> IsolationBackend:
+        """Where the work happens: your repository by default, a throwaway copy otherwise."""
+        if self.forge == "local" and self.project is not None:
+            return ProjectIsolation(self.project)
+        return TempdirIsolation()
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +137,11 @@ class Shell:
 
     def run(self) -> int:
         self.say(STYLE.bold(BANNER))
-        self.note(f"{self.session.engine} · forge {self.session.forge} · /help for commands")
+        where = self.session.project or (repo_root() if self.session.forge == "local" else None)
+        target = str(where) if where else f"forge {self.session.forge}"
+        self.note(f"{self.session.engine} · {target} · /help for commands")
+        if self.session.model is None:
+            self.note(f"no engine — put FIREWORKS_API_KEY in {CONFIG_ENV} to get a real driver")
         self.say()
         while self.running:
             try:
@@ -129,7 +164,7 @@ class Shell:
 
     def dispatch(self, line: str) -> None:
         if not line.startswith("/"):
-            self.objective(line)
+            self.handle(line)
             return
         name, _, rest = line[1:].partition(" ")
         command = self.commands.get(name)
@@ -138,34 +173,154 @@ class Shell:
             return
         command.handler(self, rest.strip())
 
+    # --- the driver decides what to do with what you typed ----------------------------------
+
+    def handle(self, line: str) -> None:
+        """Let the driver route the message: answer it, start a workflow, or plan the work."""
+        decision = self.route(line)
+        if decision.action == "reply" and decision.message:
+            self.say(f"  {decision.message}")
+            return
+        if decision.action == "run":
+            try:
+                run = get_run(decision.run)
+            except KeyError:
+                self.objective(line)  # it named a workflow that doesn't exist; treat as work
+                return
+            self.note(f"this looks like {run.name}")
+            self.start_run(run, prefill=decision.params)
+            return
+        self.objective(line)
+
+    def project_context(self) -> str:
+        """Describe the project to the driver, so it plans against the repository that exists.
+
+        Resolved from the working directory when the session has not settled on one yet: routing
+        happens before the project is confirmed, and a driver with no context asks the user which
+        repository they mean while standing in it.
+        """
+        if self.session.forge != "local":
+            return ""
+        project = self.session.project or repo_root()
+        if project is None:
+            return ""
+        workspace = Workspace(str(project), str(project))
+        listing = workspace_listing(workspace)
+        if listing:
+            files = "\n".join(f"- {path}" for path in listing)
+            total = len(tracked_files(workspace))
+            more = (
+                f"\n… and {total - len(listing)} more files not listed here."
+                if total > len(listing)
+                else ""
+            )
+            described = (
+                f"The project at {project} already contains these files:\n{files}{more}\n"
+                "Plan changes into the files that already hold that behaviour."
+            )
+        else:
+            described = f"The project at {project} is empty."
+        # The project's own conventions shape the plan, not just the code: a repo that says "one
+        # coherent change per PR" should not be handed a five-step plan.
+        conventions = load_instructions(project).render()
+        return "\n\n".join(part for part in (described, conventions) if part)
+
+    def route(self, line: str) -> Decision:
+        """Ask the driver what the message is. Anything unusable means "treat it as work"."""
+        catalog = route_catalog(
+            [(run.name, run.description, [p.name for p in run.params]) for run in all_runs()]
+        )
+        try:
+            return self.session.planner().route(line, catalog, self.project_context())
+        except Exception as exc:
+            self.error(f"driver unavailable ({type(exc).__name__}: {exc})")
+            return Decision(action="plan")
+
     # --- free-text objectives -------------------------------------------------------------
 
     def objective(self, goal: str) -> None:
         """Plan the request with the user, then reconcile the plan they accepted."""
-        repo = self.session.repo or self._ask_repo()
+        repo = self._target()
+        if repo is None:
+            return
         plan = self.negotiate(goal)
         if plan is None:
             self.note("not run")
             return
 
         objective_id = f"{repo.owner}-{repo.name}"
-        objective = plan.objective(objective_id, repo)
+        isolation = self.session.isolation()
         items = plan.work_items(objective_id)
         driver = Driver(
             runtime=self.session.runtime(),
-            isolation=TempdirIsolation(),
+            isolation=isolation,
             forge=self.session.make_forge(),
-            reviewer=PlanReviewer(plan.criteria_by_item(objective_id)),
+            reviewer=PlanReviewer(
+                plan.criteria_by_item(objective_id), plan.checks_by_item(objective_id)
+            ),
             decompose=lambda _objective: items,
             max_rounds=self.session.max_rounds,
         )
-        self._report(asyncio.run(driver.run(objective)))
+        before = self._snapshot(isolation)
+        self._report(asyncio.run(driver.run(plan.objective(objective_id, repo))))
+        self._settle(isolation, before)
+
+    def _target(self) -> RepoRef | None:
+        """What the work is aimed at: your project when local, a named repo otherwise."""
+        if self.session.forge != "local":
+            return self.session.repo or self._ask_repo()
+        project = self._ensure_project()
+        if project is None:
+            return None
+        return RepoRef(default_owner(), project.name)
+
+    def _ensure_project(self) -> Path | None:
+        """Resolve the repository `sf` edits, offering to create one if there isn't any."""
+        if self.session.project is not None:
+            return self.session.project
+        root = repo_root()
+        if root is None:
+            here = Path.cwd()
+            self.error(f"{here} is not a git repository")
+            if not confirm(f"Run git init in {here}?", default=False):
+                self.note("nothing to work in — cd into a repository, or use /forge memory")
+                return None
+            git_init(here)
+            root = here
+        self.session.project = root
+        self.note(f"project: {root}")
+        return root
+
+    def _snapshot(self, isolation: IsolationBackend) -> str | None:
+        """Capture the project before the agents touch it, so the change can be undone."""
+        if not isinstance(isolation, ProjectIsolation):
+            return None
+        return isolation.snapshot(Workspace(str(isolation.root), str(isolation.root)))
+
+    def _settle(self, isolation: IsolationBackend, before: str | None) -> None:
+        """Show what changed in the project and let the user keep it or put it back."""
+        if before is None or not isinstance(isolation, ProjectIsolation):
+            return
+        workspace = Workspace(str(isolation.root), str(isolation.root))
+        changed = isolation.changed_since(workspace, before)
+        if not changed:
+            self.note("no files changed")
+            return
+        self.say(f"  {STYLE.bold('changed')} in {isolation.root}")
+        for line in isolation.diff_since(workspace, before, stat=True).splitlines():
+            self.say(f"    {line.strip()}")
+        if confirm("Keep these changes?"):
+            self.note("kept — review them with git diff, commit when you're happy")
+            return
+        restored = isolation.restore(workspace, before)
+        self.note(f"reverted {len(restored)} file(s) to how they were")
 
     def negotiate(self, request: str) -> ProposedPlan | None:
-        """Show the driver's plan and revise it until the user accepts — or declines."""
+        """Let the driver ask what it needs, then revise its plan until the user accepts."""
+        answers = self.interview(request) if self.session.ask else []
         exchanges: list[Exchange] = []
         while True:
-            plan = self.propose(request, exchanges)
+            plan = self.propose(request, exchanges, answers)
             self._show_plan(plan)
             answer = text(
                 "Run this? (Enter to accept, or say what to change)", required=False
@@ -176,21 +331,45 @@ class Shell:
                 return None
             exchanges.append((plan, answer))
 
-    def propose(self, request: str, exchanges: list[Exchange]) -> ProposedPlan:
+    def interview(self, request: str) -> list[Answer]:
+        """Put the driver's own questions to the user. Blank answers are simply skipped."""
+        try:
+            questions = self.session.planner().clarify(request, self.project_context())
+        except Exception as exc:
+            self.error(f"driver unavailable ({type(exc).__name__}: {exc})")
+            return []
+        if not questions:
+            return []
+        self.note("a few questions before I plan (Enter to skip any):")
+        answers = [(question, text(question, required=False)) for question in questions]
+        return [(question, answer) for question, answer in answers if answer]
+
+    def propose(
+        self, request: str, exchanges: list[Exchange], answers: list[Answer]
+    ) -> ProposedPlan:
         """Ask the planner for a plan, falling back to the literal request if it can't."""
         self.note("planning…")
         try:
-            return self.session.planner().propose(request, exchanges)
+            return self.session.planner().propose(
+                request,
+                exchanges,
+                answers,
+                shared_workspace=self.session.forge == "local",
+                context=self.project_context(),
+            )
         except Exception as exc:
             self.error(f"planner unavailable ({type(exc).__name__}: {exc})")
             self.note("falling back to the request as written")
-            return StaticPlanner().propose(request, exchanges)
+            return StaticPlanner().propose(request, exchanges, answers)
 
     def _show_plan(self, plan: ProposedPlan) -> None:
         self.say(f"  {STYLE.bold('plan')}  {plan.goal}")
         for index, step in enumerate(plan.steps, start=1):
             gate = STYLE.dim(f"  → {', '.join(step.files)}") if step.files else ""
             self.say(f"    {index}. {step.spec}{gate}")
+            if step.check:
+                # Shown before you accept, because accepting the plan is what authorises it to run.
+                self.say(f"       {STYLE.dim('✓ runs:')} {STYLE.dim(step.check)}")
         if not plan.files:
             self.say(f"    {STYLE.dim('no file gate — the first green PR merges')}")
 
@@ -208,46 +387,78 @@ class Shell:
 
     # --- prepackaged runs -------------------------------------------------------------------
 
-    def start_run(self, run: PrepackagedRun) -> None:
-        """Walk a run's declared parameters, then execute the plan it builds."""
+    def start_run(self, run: PrepackagedRun, prefill: dict[str, str] | None = None) -> None:
+        """Walk a run's declared parameters, then execute the plan it builds.
+
+        Anything the driver already gathered from the conversation arrives in `prefill` and shows
+        up as the answer's default, so the user confirms rather than retypes it.
+        """
+        prefill = prefill or {}
         self.say(STYLE.bold(f"  {run.name}") + STYLE.dim(f" — {run.description}"))
-        params = {param.name: ask_param(param) for param in run.params}
+        params = {param.name: ask_param(param, prefill.get(param.name, "")) for param in run.params}
         plan = run.build(params)
 
         self.note(f"objective: {plan.objective.goal}")
         self.note(f"gates: {', '.join(plan.objective.acceptance_criteria) or 'none'}")
-        target = f"{plan.objective.repo.owner}/{plan.objective.repo.name}"
-        if self.session.forge != "memory":
+        name = plan.objective.repo.name
+        if self.session.forge.startswith("github"):
+            target = f"{plan.objective.repo.owner}/{name}"
             self.error(f"this creates {target} on GitHub for real")
-        if not confirm(f"Run it on {target} with {self.session.engine}?"):
+        else:
+            target = f"./{name}" if self.session.forge == "local" else name
+        if not confirm(f"Run it in {target} with {self.session.engine}?"):
             self.note("not run")
             return
 
+        try:
+            isolation = self._run_isolation(plan.objective.repo.name)
+        except FileExistsError as exc:
+            self.error(str(exc))
+            return
         outcome = asyncio.run(
             execute(
                 plan,
                 runtime=self.session.runtime(),
-                isolation=TempdirIsolation(),
+                isolation=isolation,
                 forge=self.session.make_forge(),
                 reviewer=AcceptanceReviewer(list(plan.objective.acceptance_criteria)),
                 max_rounds=self.session.max_rounds,
             )
         )
         self._report(outcome)
+        if isinstance(isolation, ProjectIsolation):
+            self.note(f"scaffolded into {isolation.root}")
+
+    def _run_isolation(self, name: str) -> IsolationBackend:
+        """Where a prepackaged run builds.
+
+        Locally, "create a repository" means a real new directory beside the one you are in —
+        scaffolding a fresh project into an existing repo would dump a README and workflows on top
+        of someone's work. The other forges keep using a throwaway workspace.
+        """
+        if self.session.forge != "local":
+            return TempdirIsolation()
+        target = Path.cwd() / name
+        if target.exists() and any(target.iterdir()):
+            raise FileExistsError(f"{target} already exists and is not empty")
+        target.mkdir(parents=True, exist_ok=True)
+        git_init(target)
+        return ProjectIsolation(target)
 
     def _report(self, outcome: ObjectiveOutcome) -> None:
         colour = STYLE.green if outcome.state == "done" else STYLE.red
         self.say(f"  {outcome.objective_id}: {colour(outcome.state)}")
         for item in outcome.items:
-            pr = f"PR#{item.pr.number}" if item.pr else "no PR"
-            self.note(f"{item.work_item_id}: {item.state} ({pr}, rounds={item.rounds})")
+            # PR#0 is the null forge's stand-in — local work has no pull request to point at.
+            pr = f"PR#{item.pr.number}, " if item.pr and item.pr.number else ""
+            self.note(f"{item.work_item_id}: {item.state} ({pr}rounds={item.rounds})")
         if outcome.state != "done":
             self.note("try /rounds to allow more attempts, /model to use a real engine")
 
 
-def ask_param(param) -> str:
+def ask_param(param, prefill: str = "") -> str:
     """Ask one `RunParam` using the widget its schema implies."""
-    default = param.resolve_default()
+    default = prefill or param.resolve_default()
     if param.choices:
         return select(param.prompt, param.choices, default=default)
     return text(
@@ -305,10 +516,32 @@ def _cmd_model(shell: Shell, rest: str) -> None:
     shell.note(f"engine: {shell.session.engine}")
 
 
+def _cmd_project(shell: Shell, rest: str) -> None:
+    if rest:
+        path = Path(rest).expanduser().resolve()
+        root = repo_root(path) if path.is_dir() else None
+        if root is None:
+            shell.error(f"{path} is not a git repository")
+            return
+        shell.session.project = root
+        shell.session.repo = None  # the target follows the project
+    shell.note(f"project: {shell.session.project or 'the directory you launched from'}")
+
+
+def _cmd_diff(shell: Shell, _rest: str) -> None:
+    project = shell.session.project or repo_root()
+    if project is None:
+        shell.error("no project — cd into a git repository")
+        return
+    isolation = ProjectIsolation(project)
+    status = isolation.exec_sync(["git", "status", "--short"])
+    shell.say(status.rstrip() or STYLE.dim("  working tree clean"))
+
+
 def _cmd_forge(shell: Shell, rest: str) -> None:
     if rest:
-        if rest not in ("memory", "github", "github-org"):
-            shell.error("forge must be memory, github, or github-org")
+        if rest not in ("local", "memory", "github", "github-org"):
+            shell.error("forge must be local, memory, github, or github-org")
             return
         shell.session.forge = rest
         if rest != "memory" and detected_owner() is None:
@@ -325,12 +558,23 @@ def _cmd_rounds(shell: Shell, rest: str) -> None:
     shell.note(f"rounds: {shell.session.max_rounds}")
 
 
+def _cmd_ask(shell: Shell, rest: str) -> None:
+    if rest:
+        if rest not in ("on", "off"):
+            shell.error("ask must be on or off")
+            return
+        shell.session.ask = rest == "on"
+    shell.note(f"clarifying questions: {'on' if shell.session.ask else 'off'}")
+
+
 def _cmd_status(shell: Shell, _rest: str) -> None:
     session = shell.session
+    shell.note(f"project: {session.project or 'the directory you launched from'}")
     shell.note(f"repo:   {_repo_str(session.repo)}")
     shell.note(f"engine: {session.engine}")
     shell.note(f"forge:  {session.forge}")
     shell.note(f"rounds: {session.max_rounds}")
+    shell.note(f"ask:    {'on' if session.ask else 'off'}")
 
 
 def _cmd_smoke(shell: Shell, _rest: str) -> None:
@@ -353,10 +597,13 @@ _COMMANDS = (
     Command("new-repo", "", "create and scaffold a new repository", _cmd_new_repo),
     Command("runs", "", "list the prepackaged runs", _cmd_runs),
     Command("run", "[name]", "start a prepackaged run", _cmd_run),
-    Command("repo", "[owner/name]", "set the target repository", _cmd_repo),
+    Command("project", "[path]", "the repository sf edits", _cmd_project),
+    Command("diff", "", "show what has changed in the project", _cmd_diff),
+    Command("repo", "[owner/name]", "set the target repository (non-local forges)", _cmd_repo),
     Command("model", "[provider/model|off]", "set the engine workers run on", _cmd_model),
-    Command("forge", "[memory|github|github-org]", "where PRs are opened", _cmd_forge),
+    Command("forge", "[local|memory|github]", "where the work lands", _cmd_forge),
     Command("rounds", "[n]", "review rounds before escalating", _cmd_rounds),
+    Command("ask", "[on|off]", "let the driver ask before planning", _cmd_ask),
     Command("status", "", "show the session settings", _cmd_status),
     Command("smoke", "", "run the offline pipeline self-check", _cmd_smoke),
     Command("quit", "", "leave the shell", _cmd_quit),
@@ -370,12 +617,23 @@ _DECLINE = frozenset({"n", "no", "cancel", "stop", "abort"})
 
 
 def default_session() -> Session:
-    """Seed the session from the environment: `.env` keys and an optional `OSF_MODEL`."""
-    try:
-        from dotenv import load_dotenv
+    """Seed the session from the environment.
 
-        load_dotenv()
-    except ImportError:
-        pass
-    model = os.environ.get("OSF_MODEL")
-    return Session(model=ModelRef.parse(model) if model else None)
+    `OSF_MODEL` wins; failing that, a Fireworks key in the environment (or `.env`) means the user
+    has an engine, so use it rather than silently falling back to the scripted worker — planning
+    with no model produces a plan that only echoes the request.
+    """
+    load_env()
+    return Session(model=default_model())
+
+
+def default_model() -> ModelRef | None:
+    """`OSF_MODEL`, else Fireworks when its key and SDK are both available, else offline."""
+    configured = os.environ.get("OSF_MODEL", "").strip()
+    if configured:
+        return ModelRef.parse(configured)
+    if importlib.util.find_spec("openai") is None:
+        return None  # key or not, without the `agent` extra there is no engine to run
+    from osf.engines.fireworks import DEFAULT_MODEL, api_key
+
+    return DEFAULT_MODEL if api_key() else None

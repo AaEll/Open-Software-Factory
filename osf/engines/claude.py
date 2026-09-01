@@ -14,13 +14,35 @@ import asyncio
 from collections.abc import AsyncIterator, Sequence
 
 from osf.engines._tools import (
-    WORKER_SYSTEM,
+    EDIT_TOOL_DESCRIPTION,
+    EDIT_TOOL_NAME,
+    EDIT_TOOL_PARAMETERS,
+    GLOB_TOOL_DESCRIPTION,
+    GLOB_TOOL_NAME,
+    GLOB_TOOL_PARAMETERS,
+    GREP_TOOL_DESCRIPTION,
+    GREP_TOOL_NAME,
+    GREP_TOOL_PARAMETERS,
+    READ_TOOL_DESCRIPTION,
+    READ_TOOL_NAME,
+    READ_TOOL_PARAMETERS,
     WRITE_TOOL_DESCRIPTION,
     WRITE_TOOL_NAME,
     WRITE_TOOL_PARAMETERS,
-    apply_write,
+    Toolbox,
+    worker_system,
 )
-from osf.planner import PLAN_SYSTEM, Exchange, ProposedPlan, build_messages, parse_plan
+from osf.planner import (
+    CLARIFY_SYSTEM,
+    ROUTE_SYSTEM,
+    Answer,
+    Decision,
+    Exchange,
+    ProposedPlan,
+    parse_decision,
+    parse_questions,
+    propose_with_retry,
+)
 from osf.runtime import AgentEvent, AgentResult
 from osf.types import ModelRef, SessionId, Workspace
 
@@ -35,6 +57,26 @@ _WRITE_TOOL = {
     "name": WRITE_TOOL_NAME,
     "description": WRITE_TOOL_DESCRIPTION,
     "input_schema": WRITE_TOOL_PARAMETERS,
+}
+_READ_TOOL = {
+    "name": READ_TOOL_NAME,
+    "description": READ_TOOL_DESCRIPTION,
+    "input_schema": READ_TOOL_PARAMETERS,
+}
+_EDIT_TOOL = {
+    "name": EDIT_TOOL_NAME,
+    "description": EDIT_TOOL_DESCRIPTION,
+    "input_schema": EDIT_TOOL_PARAMETERS,
+}
+_GLOB_TOOL = {
+    "name": GLOB_TOOL_NAME,
+    "description": GLOB_TOOL_DESCRIPTION,
+    "input_schema": GLOB_TOOL_PARAMETERS,
+}
+_GREP_TOOL = {
+    "name": GREP_TOOL_NAME,
+    "description": GREP_TOOL_DESCRIPTION,
+    "input_schema": GREP_TOOL_PARAMETERS,
 }
 
 
@@ -73,6 +115,7 @@ class ClaudeRuntime:
         import anthropic  # lazy: keeps the dependency optional
 
         client = anthropic.Anthropic()
+        toolbox = Toolbox(workspace)
         messages: list[dict] = [{"role": "user", "content": prompt}]
         transcript: list[AgentEvent] = []
         cost = 0.0
@@ -82,8 +125,8 @@ class ClaudeRuntime:
                 model=self._model.model_id,
                 max_tokens=16000,
                 thinking={"type": "adaptive"},
-                system=WORKER_SYSTEM,
-                tools=[_WRITE_TOOL],
+                system=worker_system(workspace, model_id=self._model.model_id),
+                tools=[_WRITE_TOOL, _READ_TOOL, _EDIT_TOOL, _GLOB_TOOL, _GREP_TOOL],
                 messages=messages,
             )
             cost += response.usage.input_tokens * _INPUT_COST
@@ -97,9 +140,9 @@ class ClaudeRuntime:
             for block in response.content:
                 if block.type != "tool_use":
                     continue
-                path = block.input["path"]
-                message, is_error = apply_write(workspace, path, block.input["content"])
-                transcript.append(AgentEvent(kind="file.write", data={"path": path}))
+                path = block.input.get("path", "")
+                message, is_error, kind = toolbox.dispatch(block.name, dict(block.input))
+                transcript.append(AgentEvent(kind=kind, data={"path": path}))
                 results.append(
                     {
                         "type": "tool_result",
@@ -119,14 +162,39 @@ class ClaudePlanner:
     def __init__(self, model: ModelRef = DEFAULT_MODEL) -> None:
         self._model = model
 
-    def propose(self, request: str, exchanges: Sequence[Exchange] = ()) -> ProposedPlan:
+    def route(self, request: str, catalog: str = "", context: str = "") -> Decision:
+        system = "\n\n".join(part for part in (ROUTE_SYSTEM, catalog, context) if part)
+        return parse_decision(self._complete(system, [{"role": "user", "content": request}], 500))
+
+    def clarify(self, request: str, context: str = "") -> list[str]:
+        system = f"{CLARIFY_SYSTEM}\n\n{context}" if context else CLARIFY_SYSTEM
+        return parse_questions(self._complete(system, [{"role": "user", "content": request}], 500))
+
+    def propose(
+        self,
+        request: str,
+        exchanges: Sequence[Exchange] = (),
+        answers: Sequence[Answer] = (),
+        *,
+        shared_workspace: bool = False,
+        context: str = "",
+    ) -> ProposedPlan:
+        return propose_with_retry(
+            self._complete,
+            request,
+            exchanges,
+            answers,
+            shared_workspace=shared_workspace,
+            context=context,
+        )
+
+    def _complete(self, system: str, messages: list[dict], max_tokens: int) -> str:
         import anthropic  # lazy: keeps the dependency optional
 
         response = anthropic.Anthropic().messages.create(
             model=self._model.model_id,
-            max_tokens=2000,
-            system=PLAN_SYSTEM,
-            messages=build_messages(request, exchanges),
+            max_tokens=max_tokens,
+            system=system,
+            messages=messages,
         )
-        text = "".join(block.text for block in response.content if block.type == "text")
-        return parse_plan(text, fallback_goal=request)
+        return "".join(block.text for block in response.content if block.type == "text")

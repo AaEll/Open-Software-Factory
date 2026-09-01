@@ -36,11 +36,14 @@ pytest
 you accept, then reconciles it (`decompose → dispatch worker → open PR → review → merge`):
 
 ```console
+$ cd ~/code/my-project
 $ sf
 Open Software Factory
+  fireworks/accounts/fireworks/models/kimi-k2p7-code · ~/code/my-project · /help for commands
 
 › Create a landing page for my dog Pobrecita
-? Repository name › pobrecita
+? What is the main purpose: playful profile, memorial, adoption page? › playful profile
+? What tone should the page have (cute, elegant, humorous)? › playful
   planning…
   plan  Build a charming single-page landing site for Pobrecita the dog.
     1. Create a responsive landing page with a hero, a short bio and a photo
@@ -48,7 +51,10 @@ Open Software Factory
 ? Run this? (Enter to accept, or say what to change) › also add a gallery page
 ```
 
-The files on each step are the definition of done — proposed by the driver, not demanded of you.
+Changes land in the repository you launched from — `sf` shows you the diff and offers to revert,
+and never stages or commits on your behalf. The driver asks what it needs, then proposes the plan;
+the files on each step are the definition of done, proposed rather than demanded of you. The engine
+is picked up from `FIREWORKS_API_KEY` (or `OSF_MODEL`) at startup.
 `/commands` reach the structured workflows (`/new-repo`), pick an engine (`/model`), and choose a
 forge (`/forge github`). Step-by-step: [`docs/cli-howto.md`](docs/cli-howto.md). Driving the loop
 from Python instead: [`docs/running-the-loop.md`](docs/running-the-loop.md).
