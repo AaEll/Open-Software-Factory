@@ -17,6 +17,12 @@ from osf.engines._tools import (
     EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_NAME,
     EDIT_TOOL_PARAMETERS,
+    GLOB_TOOL_DESCRIPTION,
+    GLOB_TOOL_NAME,
+    GLOB_TOOL_PARAMETERS,
+    GREP_TOOL_DESCRIPTION,
+    GREP_TOOL_NAME,
+    GREP_TOOL_PARAMETERS,
     READ_TOOL_DESCRIPTION,
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
@@ -61,6 +67,16 @@ _EDIT_TOOL = {
     "name": EDIT_TOOL_NAME,
     "description": EDIT_TOOL_DESCRIPTION,
     "input_schema": EDIT_TOOL_PARAMETERS,
+}
+_GLOB_TOOL = {
+    "name": GLOB_TOOL_NAME,
+    "description": GLOB_TOOL_DESCRIPTION,
+    "input_schema": GLOB_TOOL_PARAMETERS,
+}
+_GREP_TOOL = {
+    "name": GREP_TOOL_NAME,
+    "description": GREP_TOOL_DESCRIPTION,
+    "input_schema": GREP_TOOL_PARAMETERS,
 }
 
 
@@ -110,7 +126,7 @@ class ClaudeRuntime:
                 max_tokens=16000,
                 thinking={"type": "adaptive"},
                 system=worker_system(workspace, model_id=self._model.model_id),
-                tools=[_WRITE_TOOL, _READ_TOOL, _EDIT_TOOL],
+                tools=[_WRITE_TOOL, _READ_TOOL, _EDIT_TOOL, _GLOB_TOOL, _GREP_TOOL],
                 messages=messages,
             )
             cost += response.usage.input_tokens * _INPUT_COST

@@ -125,6 +125,23 @@ the session.
 the step isn't accepted until those files exist, and it retries until they do. The driver proposes
 them from your request; you just say whether the plan is right.
 
+A step may also propose a **command** that proves it worked, shown before you accept:
+
+```console
+    1. Create fizzbuzz.py containing a fizzbuzz function…  → fizzbuzz.py
+       ✓ runs: python -c "from fizzbuzz import fizzbuzz; assert fizzbuzz(15) == 'FizzBuzz'"
+    2. Create tests/test_fizzbuzz.py with pytest cases…  → tests/test_fizzbuzz.py
+       ✓ runs: python -m pytest -q tests/test_fizzbuzz.py
+```
+
+The step is not accepted until that command exits 0, and its output goes back to the worker as
+feedback. This is what catches the failures a file-existence gate cannot — a module that imports but
+does nothing, an entry point quietly turned into a library.
+
+Accepting the plan is what authorises those commands to run, so read them. They are run **without a
+shell** (no `&&`, `;` or redirection — those become literal arguments), with a 60-second timeout,
+and with bytecode writing disabled so a check cannot litter your working tree.
+
 **Feedback is plain language.** Anything that isn't Enter or `no` is treated as a change request,
 and the driver re-plans with it:
 
@@ -150,14 +167,17 @@ repository you actually have, not an imagined one.
 `~/.config/osf/AGENTS.md` if you keep one. The project's file wins where they disagree, and when
 there is too much to fit, broader files are dropped whole before yours is truncated.
 
-Workers have three tools: `read_file`, `edit_file` (replace one exact string, leaving the rest
-alone), and `write_file` (create, or replace wholesale). Two rules are enforced rather than
-requested:
+Workers have five tools: `read_file`, `edit_file` (replace one exact string, leaving the rest
+alone), `write_file` (create, or replace wholesale), and `find_files` / `search_files` for looking
+beyond the listing. Three rules are enforced rather than requested:
 
 - **an existing file cannot be overwritten until it has been read** in that session — a blind
   `write_file` over your work is refused with an explanation
 - **an ambiguous edit is refused**: if the text to replace appears more than once, the worker is
   told to be more specific rather than guessing which one you meant
+- **anything git ignores is out of bounds**, for reading as well as writing — `.env`, credentials,
+  `node_modules/`, and `.git/` itself are refused, so a guessed filename cannot put your keys in a
+  model request
 
 Each step is reviewed against its own files. Locally the steps run in
 order **in the same repository**, so a later step sees what the earlier ones wrote and can extend

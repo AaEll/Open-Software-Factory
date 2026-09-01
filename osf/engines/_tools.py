@@ -7,7 +7,9 @@ but the parameter shape and the actual write live here so behavior stays identic
 
 from __future__ import annotations
 
+import re
 import subprocess
+from fnmatch import fnmatch
 from pathlib import Path
 
 from osf.instructions import load as load_instructions
@@ -26,6 +28,36 @@ WRITE_TOOL_PARAMETERS = {
         "content": {"type": "string", "description": "Full file contents to write"},
     },
     "required": ["path", "content"],
+    "additionalProperties": False,
+}
+
+GLOB_TOOL_NAME = "find_files"
+GLOB_TOOL_DESCRIPTION = (
+    "Find files whose path matches a glob, e.g. `*.py`, `src/**/*.ts`, `test_*.py`. Use this to "
+    "look beyond the files listed for you — the listing is a starting point, not the whole project."
+)
+GLOB_TOOL_PARAMETERS = {
+    "type": "object",
+    "properties": {"pattern": {"type": "string", "description": "Glob pattern, e.g. src/**/*.py"}},
+    "required": ["pattern"],
+    "additionalProperties": False,
+}
+
+GREP_TOOL_NAME = "search_files"
+GREP_TOOL_DESCRIPTION = (
+    "Search file contents for a regular expression and return matching lines with their paths and "
+    "line numbers. Use it to find where something is defined or used before changing it."
+)
+GREP_TOOL_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "pattern": {"type": "string", "description": "Regular expression to search for"},
+        "glob": {
+            "type": "string",
+            "description": "Optional path glob to limit the search, e.g. *.py",
+        },
+    },
+    "required": ["pattern"],
     "additionalProperties": False,
 }
 
@@ -106,6 +138,12 @@ def guidance_for(model_id: str | None) -> str:
     return ""
 
 
+# Bounds on search results. A worker that asks a broad question should get a usable answer, not a
+# transcript of the repository.
+GLOB_LIMIT = 100
+GREP_LIMIT = 50
+GREP_LINE_LIMIT = 200
+
 # How many entries of the project to show. Enough to orient in a small repo, short enough not to
 # crowd out the actual request in the prompt.
 LISTING_LIMIT = 40
@@ -140,13 +178,23 @@ def worker_system(workspace: Workspace, *, model_id: str | None = None) -> str:
     listing = workspace_listing(workspace)
     if listing:
         contents = "It already contains:\n" + "\n".join(f"- {path}" for path in listing)
-        contents += "\nRead any of these you are about to change."
+        contents += (
+            "\nRead any of these you are about to change. This list is a starting point and may "
+            "be incomplete — use find_files or search_files to look for anything else."
+        )
     else:
         contents = "It is empty."
 
-    parts = [WORKER_SYSTEM, guidance_for(model_id)]
-    parts.append(f"Your working directory is {workspace.path}. {contents}")
-    parts.append(load_instructions(workspace.path).render())
+    # Ordered stable-first: the shared instructions and model guidance never change, the project's
+    # conventions change rarely, and the listing changes the moment the agent writes a file. Both
+    # reference harnesses treat the prompt prefix as something to keep still; this is the cheap
+    # half of that, and it costs nothing to get right now.
+    parts = [
+        WORKER_SYSTEM,
+        guidance_for(model_id),
+        load_instructions(workspace.path).render(),
+        f"Your working directory is {workspace.path}. {contents}",
+    ]
     return "\n\n".join(part for part in parts if part)
 
 
@@ -211,21 +259,54 @@ def apply_edit(
     return (f"Replaced {occurrences if replace_all else 1} occurrence(s) in {rel_path}", False)
 
 
+def is_ignored(workspace: Workspace, rel_path: str) -> bool:
+    """Whether git would ignore this path — and therefore whether it is the project's business.
+
+    Ignored paths are where secrets and machine-local junk live: `.env`, credentials, build output.
+    They are excluded from the listing already; this is what stops an agent that guesses a name
+    from reading one anyway.
+    """
+    if rel_path == ".git" or rel_path.startswith(".git/") or "/.git/" in rel_path:
+        return True
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", "--", rel_path],
+        cwd=workspace.path,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 class Toolbox:
     """The tools for one worker session, and the policy that governs them.
 
-    The policy is read-before-overwrite: `write_file` may create anything, but it may only replace
-    a file the session has already read. An agent that has not read a file cannot know what it is
-    destroying, and the prompt asking it to be careful is advice — this is the part that holds.
+    Two rules hold regardless of what the prompt says, because a prompt is advice:
+
+    * **Read before overwrite.** `write_file` may create anything, but it may only replace a file
+      the session has already read — an agent that has not read a file cannot know what it is
+      destroying.
+    * **Ignored paths are out of bounds.** Anything git ignores, and `.git/` itself, is refused for
+      both reading and writing. That is where `.env` and credentials live, and "the agent did not
+      think to try" is not a control.
+
+    `allow_ignored=True` lifts the second rule for a caller that means it.
     """
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(self, workspace: Workspace, *, allow_ignored: bool = False) -> None:
         self.workspace = workspace
+        self.allow_ignored = allow_ignored
         self.seen: set[str] = set()
 
     def dispatch(self, name: str, args: dict) -> tuple[str, bool, str]:
         """Run one tool call. Returns (message for the model, is_error, transcript event kind)."""
         path = args.get("path", "")
+        if path and not self.allow_ignored and is_ignored(self.workspace, path):
+            return (
+                f"{path} is outside the project: git ignores it, so it holds secrets or machine "
+                "state rather than code. Work with the tracked files instead.",
+                True,
+                "file.refused",
+            )
         if name == READ_TOOL_NAME:
             message, failed = apply_read(self.workspace, path)
             if not failed:
@@ -242,6 +323,14 @@ class Toolbox:
             if not failed:
                 self.seen.add(path)
             return message, failed, "file.edit"
+        if name == GLOB_TOOL_NAME:
+            message, failed = apply_glob(self.workspace, args.get("pattern", ""))
+            return message, failed, "file.search"
+        if name == GREP_TOOL_NAME:
+            message, failed = apply_grep(
+                self.workspace, args.get("pattern", ""), args.get("glob", "")
+            )
+            return message, failed, "file.search"
         if name == WRITE_TOOL_NAME:
             if Path(self.workspace.path, path).is_file() and path not in self.seen:
                 return (
@@ -256,3 +345,71 @@ class Toolbox:
                 self.seen.add(path)
             return message, failed, "file.write"
         return f"Unknown tool {name}", True, "error"
+
+
+def tracked_files(workspace: Workspace) -> list[str]:
+    """Every file git would show, ignored paths excluded — the search universe."""
+    result = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+        cwd=workspace.path,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return [line for line in result.stdout.splitlines() if line]
+    root = Path(workspace.path)
+    return [
+        str(path.relative_to(root))
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and ".git" not in path.parts
+    ]
+
+
+def apply_glob(workspace: Workspace, pattern: str) -> tuple[str, bool]:
+    """Find tracked files whose path matches `pattern`."""
+    if not pattern:
+        return "pattern must not be empty", True
+    paths = tracked_files(workspace)
+    # `**/` should also match at the root, which fnmatch does not do on its own.
+    matched = [
+        path
+        for path in paths
+        if fnmatch(path, pattern)
+        or fnmatch(path, pattern.replace("**/", "", 1))
+        or fnmatch(Path(path).name, pattern)
+    ]
+    if not matched:
+        return f"No files match {pattern}", False
+    shown = matched[:GLOB_LIMIT]
+    listing = "\n".join(shown)
+    if len(matched) > GLOB_LIMIT:
+        listing += f"\n… and {len(matched) - GLOB_LIMIT} more"
+    return listing, False
+
+
+def apply_grep(workspace: Workspace, pattern: str, glob: str = "") -> tuple[str, bool]:
+    """Search tracked file contents for a regular expression."""
+    if not pattern:
+        return "pattern must not be empty", True
+    try:
+        expression = re.compile(pattern)
+    except re.error as exc:
+        return f"{pattern} is not a valid regular expression ({exc})", True
+
+    root = Path(workspace.path)
+    hits: list[str] = []
+    for path in tracked_files(workspace):
+        if glob and not (fnmatch(path, glob) or fnmatch(Path(path).name, glob)):
+            continue
+        try:
+            content = (root / path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue  # binary or unreadable: not what a text search is for
+        for number, line in enumerate(content.splitlines(), start=1):
+            if expression.search(line):
+                hits.append(f"{path}:{number}: {line.strip()[:GREP_LINE_LIMIT]}")
+                if len(hits) >= GREP_LIMIT:
+                    return "\n".join(hits) + f"\n… stopped at {GREP_LIMIT} matches", False
+    if not hits:
+        return f"No matches for {pattern}", False
+    return "\n".join(hits), False

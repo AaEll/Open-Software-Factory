@@ -400,3 +400,35 @@ def test_no_project_context_when_the_work_is_not_local(capsys, monkeypatch):
     monkeypatch.setattr(Session, "planner", lambda _self: _Spy())
     run_shell("/repo me/site\nbuild something\n\n/quit\n", capsys, Session(forge="memory"))
     assert seen["context"] == ""  # a throwaway workspace has no project to describe
+
+
+def test_the_driver_has_project_context_before_the_project_is_confirmed(
+    capsys, repo: Path, monkeypatch
+):
+    """Routing runs before `_ensure_project`, so context must resolve from the cwd on its own.
+
+    Observed live: standing in a repo, asked to change a setting, the driver replied "which
+    repository should I change this in?" because it had been handed nothing.
+    """
+    (repo / "settings.py").write_text("TIMEOUT = 30\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    seen = {}
+
+    class _Spy:
+        def route(self, request, catalog="", context=""):
+            seen["route"] = context
+            from osf.planner import Decision
+
+            return Decision(action="reply", message="ok")
+
+        def clarify(self, request, context=""):
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
+            from osf.planner import ProposedPlan, Step
+
+            return ProposedPlan("g", [Step("s")])
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Spy())
+    run_shell("change the timeout\n/quit\n", capsys, Session(forge="local"))  # project unset
+    assert "settings.py" in seen["route"]

@@ -30,7 +30,7 @@ from osf.config import (
     valid_repo_name,
 )
 from osf.driver import Driver, ObjectiveOutcome
-from osf.engines._tools import workspace_listing
+from osf.engines._tools import tracked_files, workspace_listing
 from osf.forge import Forge
 from osf.instructions import load as load_instructions
 from osf.isolation import IsolationBackend
@@ -193,15 +193,29 @@ class Shell:
         self.objective(line)
 
     def project_context(self) -> str:
-        """Describe the project to the driver, so it plans against the repository that exists."""
-        project = self.session.project if self.session.forge == "local" else None
+        """Describe the project to the driver, so it plans against the repository that exists.
+
+        Resolved from the working directory when the session has not settled on one yet: routing
+        happens before the project is confirmed, and a driver with no context asks the user which
+        repository they mean while standing in it.
+        """
+        if self.session.forge != "local":
+            return ""
+        project = self.session.project or repo_root()
         if project is None:
             return ""
-        listing = workspace_listing(Workspace(str(project), str(project)))
+        workspace = Workspace(str(project), str(project))
+        listing = workspace_listing(workspace)
         if listing:
             files = "\n".join(f"- {path}" for path in listing)
+            total = len(tracked_files(workspace))
+            more = (
+                f"\n… and {total - len(listing)} more files not listed here."
+                if total > len(listing)
+                else ""
+            )
             described = (
-                f"The project at {project} already contains these files:\n{files}\n"
+                f"The project at {project} already contains these files:\n{files}{more}\n"
                 "Plan changes into the files that already hold that behaviour."
             )
         else:
@@ -241,7 +255,9 @@ class Shell:
             runtime=self.session.runtime(),
             isolation=isolation,
             forge=self.session.make_forge(),
-            reviewer=PlanReviewer(plan.criteria_by_item(objective_id)),
+            reviewer=PlanReviewer(
+                plan.criteria_by_item(objective_id), plan.checks_by_item(objective_id)
+            ),
             decompose=lambda _objective: items,
             max_rounds=self.session.max_rounds,
         )
@@ -351,6 +367,9 @@ class Shell:
         for index, step in enumerate(plan.steps, start=1):
             gate = STYLE.dim(f"  → {', '.join(step.files)}") if step.files else ""
             self.say(f"    {index}. {step.spec}{gate}")
+            if step.check:
+                # Shown before you accept, because accepting the plan is what authorises it to run.
+                self.say(f"       {STYLE.dim('✓ runs:')} {STYLE.dim(step.check)}")
         if not plan.files:
             self.say(f"    {STYLE.dim('no file gate — the first green PR merges')}")
 

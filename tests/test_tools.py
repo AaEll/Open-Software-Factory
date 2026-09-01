@@ -8,7 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from osf.engines._tools import Toolbox, apply_edit, apply_read, apply_write
+from osf.engines._tools import (
+    Toolbox,
+    apply_edit,
+    apply_glob,
+    apply_grep,
+    apply_read,
+    apply_write,
+)
 from osf.types import Workspace
 
 
@@ -199,3 +206,157 @@ def test_the_worker_is_told_it_cannot_ask(workspace):
 
     prompt = worker_system(workspace, model_id="kimi-k2")
     assert "cannot ask anyone" in prompt
+
+
+# --- ignored paths are out of bounds ------------------------------------------------------------
+
+
+def _repo(tmp_path: Path) -> None:
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+
+def test_reading_a_gitignored_file_is_refused(workspace, tmp_path: Path):
+    """`.env` is exactly the file an agent must not be able to read into a model request."""
+    _repo(tmp_path)
+    (tmp_path / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("FIREWORKS_API_KEY=hunter2", encoding="utf-8")
+
+    message, is_error, kind = Toolbox(workspace).dispatch("read_file", {"path": ".env"})
+    assert is_error and kind == "file.refused"
+    assert "hunter2" not in message
+    assert "git ignores it" in message
+
+
+def test_the_git_directory_is_refused_even_when_not_ignored(workspace, tmp_path: Path):
+    _repo(tmp_path)
+    _message, is_error, _kind = Toolbox(workspace).dispatch("read_file", {"path": ".git/config"})
+    assert is_error
+
+
+def test_writing_to_an_ignored_path_is_refused(workspace, tmp_path: Path):
+    """Otherwise an agent can hide output where neither the diff nor the revert will find it."""
+    _repo(tmp_path)
+    (tmp_path / ".gitignore").write_text("secrets/\n", encoding="utf-8")
+
+    _message, is_error, _kind = Toolbox(workspace).dispatch(
+        "write_file", {"path": "secrets/leak.txt", "content": "x"}
+    )
+    assert is_error
+    assert not (tmp_path / "secrets" / "leak.txt").exists()
+
+
+def test_tracked_files_are_unaffected(workspace, tmp_path: Path):
+    _repo(tmp_path)
+    (tmp_path / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    message, is_error, _kind = Toolbox(workspace).dispatch("read_file", {"path": "app.py"})
+    assert not is_error and message == "x = 1\n"
+
+
+def test_a_caller_that_means_it_can_opt_out(workspace, tmp_path: Path):
+    _repo(tmp_path)
+    (tmp_path / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("KEY=value", encoding="utf-8")
+
+    box = Toolbox(workspace, allow_ignored=True)
+    message, is_error, _kind = box.dispatch("read_file", {"path": ".env"})
+    assert not is_error and message == "KEY=value"
+
+
+def test_the_prompt_puts_the_volatile_listing_last(workspace, tmp_path: Path):
+    """Stable text first: the listing changes the moment the agent writes anything."""
+    from osf.engines._tools import WORKER_SYSTEM, worker_system
+
+    (tmp_path / "AGENTS.md").write_text("house rule\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    prompt = worker_system(workspace, model_id="kimi-k2")
+
+    assert prompt.startswith(WORKER_SYSTEM)
+    assert prompt.index("house rule") < prompt.index("Your working directory is")
+
+
+# --- searching the project ----------------------------------------------------------------------
+
+
+def test_find_files_matches_a_glob(workspace, tmp_path: Path):
+    _repo(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("hi\n", encoding="utf-8")
+
+    matches, is_error = apply_glob(workspace, "*.py")
+    assert not is_error
+    assert "src/app.py" in matches
+    assert "notes.md" not in matches
+
+
+def test_find_files_reports_no_match_without_erroring(workspace, tmp_path: Path):
+    _repo(tmp_path)
+    matches, is_error = apply_glob(workspace, "*.rs")
+    assert not is_error  # "nothing here" is an answer, not a failure
+    assert "No files match" in matches
+
+
+def test_search_files_returns_paths_and_line_numbers(workspace, tmp_path: Path):
+    _repo(tmp_path)
+    (tmp_path / "app.py").write_text("import os\n\ndef handler():\n    return 1\n", "utf-8")
+
+    matches, is_error = apply_grep(workspace, r"def \w+")
+    assert not is_error
+    assert "app.py:3: def handler():" in matches
+
+
+def test_search_can_be_limited_by_glob(workspace, tmp_path: Path):
+    _repo(tmp_path)
+    (tmp_path / "app.py").write_text("TARGET\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("TARGET\n", encoding="utf-8")
+
+    matches, _is_error = apply_grep(workspace, "TARGET", "*.md")
+    assert "notes.md" in matches
+    assert "app.py" not in matches
+
+
+def test_search_ignores_what_git_ignores(workspace, tmp_path: Path):
+    """The same boundary as read_file: search must not surface secrets either."""
+    _repo(tmp_path)
+    (tmp_path / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("FIREWORKS_API_KEY=hunter2\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("KEY = 'public'\n", encoding="utf-8")
+
+    matches, _is_error = apply_grep(workspace, "KEY")
+    assert "app.py" in matches
+    assert "hunter2" not in matches
+    assert ".env" not in apply_glob(workspace, "*")[0]
+
+
+def test_a_bad_regular_expression_is_reported(workspace, tmp_path: Path):
+    _repo(tmp_path)
+    matches, is_error = apply_grep(workspace, "([unclosed")
+    assert is_error and "not a valid regular expression" in matches
+
+
+def test_search_results_are_bounded(workspace, tmp_path: Path):
+    """A broad question must return a usable answer, not the whole repository."""
+    from osf.engines._tools import GREP_LIMIT
+
+    _repo(tmp_path)
+    (tmp_path / "big.py").write_text("match\n" * (GREP_LIMIT + 50), encoding="utf-8")
+
+    matches, _is_error = apply_grep(workspace, "match")
+    assert matches.count("big.py:") == GREP_LIMIT
+    assert "stopped at" in matches
+
+
+def test_the_search_tools_are_reachable_through_the_toolbox(workspace, tmp_path: Path):
+    _repo(tmp_path)
+    (tmp_path / "app.py").write_text("hello\n", encoding="utf-8")
+    box = Toolbox(workspace)
+
+    found, is_error, kind = box.dispatch("find_files", {"pattern": "*.py"})
+    assert not is_error and kind == "file.search" and "app.py" in found
+
+    hits, is_error, _kind = box.dispatch("search_files", {"pattern": "hello"})
+    assert not is_error and "app.py:1" in hits

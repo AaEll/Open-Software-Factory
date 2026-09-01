@@ -14,7 +14,7 @@ from osf.planner import (
     parse_questions,
     propose_with_retry,
 )
-from osf.review import PlanReviewer
+from osf.review import PlanReviewer, run_check
 from osf.types import RepoRef, Workspace
 
 
@@ -212,3 +212,117 @@ def test_plan_reviewer_judges_each_item_on_its_own_files(tmp_path):
 def test_plan_reviewer_approves_an_ungated_item(tmp_path):
     workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
     assert _review(PlanReviewer({}), "obj-1", workspace).approved
+
+
+# --- executable checks --------------------------------------------------------------------------
+
+
+def test_a_step_may_declare_a_check():
+    plan = parse_plan(
+        '{"goal": "g", "steps": [{"spec": "a", "files": ["app.py"], '
+        '"check": "python app.py --help"}]}',
+        fallback_goal="x",
+    )
+    assert plan.steps[0].check == "python app.py --help"
+    assert plan.checks_by_item("obj") == {"obj-1": "python app.py --help"}
+
+
+def test_steps_without_a_check_are_simply_absent():
+    plan = parse_plan(
+        '{"goal": "g", "steps": [{"spec": "a", "files": ["x.py"]}]}', fallback_goal="x"
+    )
+    assert plan.checks_by_item("obj") == {}
+
+
+def test_the_plan_prompt_asks_for_a_check():
+    assert "check" in PLAN_SYSTEM
+    assert "exits 0" in PLAN_SYSTEM
+    assert "no installs, no network" in PLAN_SYSTEM  # the command runs on the user's machine
+
+
+def test_check_passes_when_the_command_exits_zero(tmp_path):
+    workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
+    assert run_check("python -c pass", workspace).passed
+
+
+def test_check_fails_with_the_command_output_as_feedback(tmp_path):
+    """The worker's next round needs to see why, not just that it failed."""
+    workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
+    result = run_check("python -c \"import sys; print('boom'); sys.exit(3)\"", workspace)
+    assert not result.passed
+    assert "exited 3" in result.detail
+    assert "boom" in result.detail
+
+
+def test_a_check_runs_in_the_workspace(tmp_path):
+    (tmp_path / "marker.txt").write_text("here", encoding="utf-8")
+    workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
+    assert run_check("python -c \"open('marker.txt')\"", workspace).passed
+
+
+def test_a_missing_program_is_reported_not_raised(tmp_path):
+    workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
+    result = run_check("definitely-not-a-real-program --version", workspace)
+    assert not result.passed and "not installed" in result.detail
+
+
+def test_a_check_is_not_run_through_a_shell(tmp_path):
+    """The user approved a command, not a shell script; `&&` and `;` must not chain anything.
+
+    The chained part becomes plain arguments to the first program — here python ignores them — so
+    what matters is that nothing else *ran*, not that the check failed.
+    """
+    workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
+    run_check("python -c pass && touch pwned.txt", workspace)
+    assert not (tmp_path / "pwned.txt").exists()
+
+    run_check("python -c pass; touch semicolon.txt", workspace)
+    assert not (tmp_path / "semicolon.txt").exists()
+
+    # Redirection is likewise inert.
+    run_check("python -c pass > redirected.txt", workspace)
+    assert not (tmp_path / "redirected.txt").exists()
+
+
+def test_an_unparseable_check_fails_cleanly(tmp_path):
+    workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
+    assert not run_check('python -c "unclosed', workspace).passed
+
+
+def test_the_reviewer_runs_the_check_only_after_the_files_exist(tmp_path):
+    """A failing check on a step whose files are missing is noise; the missing file is the news."""
+    workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
+    reviewer = PlanReviewer({"obj-1": ["app.py exists"]}, {"obj-1": "definitely-not-a-program"})
+    item = WorkItem(id="obj-1", objective_id="obj", spec="spec")
+
+    rejected = asyncio.run(reviewer.review(item, workspace))
+    assert "missing required files" in rejected.comment
+
+
+def test_the_reviewer_rejects_a_step_whose_check_fails(tmp_path):
+    (tmp_path / "app.py").write_text("import sys; sys.exit(1)\n", encoding="utf-8")
+    workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
+    reviewer = PlanReviewer({"obj-1": ["app.py exists"]}, {"obj-1": "python app.py"})
+    item = WorkItem(id="obj-1", objective_id="obj", spec="spec")
+
+    rejected = asyncio.run(reviewer.review(item, workspace))
+    assert not rejected.approved
+    assert "exited 1" in rejected.comment
+
+
+def test_the_reviewer_approves_when_the_check_passes(tmp_path):
+    (tmp_path / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
+    reviewer = PlanReviewer({"obj-1": ["app.py exists"]}, {"obj-1": "python app.py"})
+    item = WorkItem(id="obj-1", objective_id="obj", spec="spec")
+
+    assert asyncio.run(reviewer.review(item, workspace)).approved
+
+
+def test_a_check_does_not_litter_the_workspace(tmp_path):
+    """Bytecode caches would otherwise land in the diff as changes the user never asked for."""
+    (tmp_path / "mod.py").write_text("VALUE = 1\n", encoding="utf-8")
+    workspace = Workspace(path=str(tmp_path), handle=str(tmp_path))
+
+    assert run_check('python -c "import mod; assert mod.VALUE == 1"', workspace).passed
+    assert not (tmp_path / "__pycache__").exists()

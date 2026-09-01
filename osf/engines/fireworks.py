@@ -18,6 +18,12 @@ from osf.engines._tools import (
     EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_NAME,
     EDIT_TOOL_PARAMETERS,
+    GLOB_TOOL_DESCRIPTION,
+    GLOB_TOOL_NAME,
+    GLOB_TOOL_PARAMETERS,
+    GREP_TOOL_DESCRIPTION,
+    GREP_TOOL_NAME,
+    GREP_TOOL_PARAMETERS,
     READ_TOOL_DESCRIPTION,
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
@@ -88,6 +94,22 @@ _TOOLS = [
             "name": EDIT_TOOL_NAME,
             "description": EDIT_TOOL_DESCRIPTION,
             "parameters": EDIT_TOOL_PARAMETERS,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": GLOB_TOOL_NAME,
+            "description": GLOB_TOOL_DESCRIPTION,
+            "parameters": GLOB_TOOL_PARAMETERS,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": GREP_TOOL_NAME,
+            "description": GREP_TOOL_DESCRIPTION,
+            "parameters": GREP_TOOL_PARAMETERS,
         },
     },
 ]

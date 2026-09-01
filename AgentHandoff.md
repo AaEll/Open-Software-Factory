@@ -41,10 +41,19 @@ owed, per opencode and deepseek-harness alike. `_tools.guidance_for(model_id)` a
 model-family overlay (Kimi today), our own wording rather than a copy, adapted to a worker that has
 no shell and no user to ask.
 
-Workers get three sandboxed tools (`osf/engines/_tools.py`): `read_file`, `edit_file` (exact string
-replacement) and `write_file`. `Toolbox` owns the session policy, borrowed from opencode's `edit`
+Workers get five sandboxed tools (`osf/engines/_tools.py`): `read_file`, `edit_file` (exact string
+replacement), `write_file`, and `find_files`/`search_files` — so the injected listing is a starting
+point rather than the model's whole world. `Toolbox` owns the session policy, borrowed from opencode's `edit`
 tool and deepseek-harness's `fs-observation-policy`: an existing file cannot be written until it has
-been read this session, and an ambiguous `edit_file` is refused rather than guessed. Prompts are
+been read this session, an ambiguous `edit_file` is refused rather than guessed, and anything git
+ignores (plus `.git/`) is refused for read and write alike — `.env` was previously readable by any
+worker that guessed the name.
+
+**Steps may carry an executable gate.** `Step.check` is a command the planner proposes and the user
+approves with the plan; `osf/review.py`'s `run_check` runs it without a shell, on a timeout, with
+bytecode writing off, and a non-zero exit sends the output back to the worker as feedback. Neither
+reference harness has this — it is where we deliberately diverge, because "the files exist" cannot
+catch an entry point that was gutted. Prompts are
 built per run — `worker_system(workspace)` for the worker, `Shell.project_context()` for the driver
 — both naming the directory and listing what is in it via `git ls-files`. Planning without that
 listing produced work routed into files that did not exist.
