@@ -1,5 +1,10 @@
 # Open Software Factory
 
+> **Building toward the MVP:** a local agent that takes a request from plain language to deployed
+> infrastructure — plans with you, edits your repository, proves the result runs, and publishes it.
+> **[`MVP.md`](MVP.md) is the current scope**, including what is deliberately out of it. The
+> autonomous forge loop described below is the destination, not this milestone.
+
 Autonomous multi-agent software factory: **objectives in, merged PRs out**, with minimal human input.
 
 A human sets an objective; **driver agents** run an autonomous loop — write a spec, dispatch **worker

@@ -15,6 +15,13 @@ Notes for any agent starting work in this repo. Read `docs/ARCHITECTURE.md` for 
    PRs, not a bespoke message bus. Everything is event-sourced and resumable
    (Objective → WorkItem DAG → PullRequest → AgentRun).
 
+## Current milestone
+
+[`MVP.md`](MVP.md) defines what we are building now: a **local** agent that plans with the user,
+edits the repository it was launched in, proves the result runs, and deploys it through the
+PromptPay broker. The autonomous forge loop in point 2 below remains the destination — it is not
+this milestone, and the MVP does not depend on it. Read `MVP.md` before picking up work.
+
 ## Status
 
 Phase 0 (foundations & contracts) + first live vertical slice. `docs/ARCHITECTURE.md` written;
