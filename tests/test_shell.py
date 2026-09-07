@@ -578,3 +578,54 @@ def test_clean_can_be_declined(capsys, monkeypatch, tmp_path):
 def test_clean_with_nothing_to_do(capsys, monkeypatch, tmp_path):
     monkeypatch.setattr("osf.shell.tempfile.gettempdir", lambda: str(tmp_path))
     assert "no throwaway workspaces" in run_shell("/clean\n/quit\n", capsys)
+
+
+# --- headless, for scripts and CI -----------------------------------------------------------------
+
+
+def test_a_one_shot_request_runs_without_the_shell(capsys, monkeypatch):
+    from osf.shell import run_once
+
+    _plan(monkeypatch, ProposedPlan("Build it", [Step("Write index.html", ["index.html"])]))
+    session = Session(forge="memory", repo=RepoRef("me", "site"))
+    code = run_once(session, "build a page", assume_yes=True)
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "me-site: done" in out
+    assert "Run this?" not in out  # nothing was asked; there is nobody to answer
+
+
+def test_a_one_shot_failure_exits_nonzero(capsys, monkeypatch):
+    """CI needs the exit code to mean something."""
+    from osf.shell import run_once
+
+    # The scripted worker only writes index.html, so this gate can never be met.
+    _plan(monkeypatch, ProposedPlan("Build it", [Step("Write the app", ["app/main.py"])]))
+    session = Session(forge="memory", repo=RepoRef("me", "site"), max_rounds=1)
+    assert run_once(session, "build the app", assume_yes=True) == 1
+    assert "escalated" in capsys.readouterr().out
+
+
+def test_a_one_shot_request_still_asks_when_not_told_to_assume_yes(capsys, monkeypatch):
+    """`sf "..."` by hand should behave like the shell, minus the loop."""
+    from osf.shell import run_once
+
+    _plan(monkeypatch, ProposedPlan("Build it", [Step("Write index.html", ["index.html"])]))
+    sys.stdin = io.StringIO("\n1\n")  # accept the plan, then keep the result
+    try:
+        code = run_once(Session(forge="memory", repo=RepoRef("me", "site")), "build a page")
+    finally:
+        sys.stdin = sys.__stdin__
+    assert code == 0
+    assert "Run this?" in capsys.readouterr().out
+
+
+def test_a_one_shot_reply_is_not_a_failure(capsys, monkeypatch):
+    """Asking `sf "what can you do?"` should answer and exit 0, not report a failed objective."""
+    from osf.shell import run_once
+
+    _router(monkeypatch, Decision(action="reply", message="I build things."))
+    code = run_once(Session(forge="memory"), "what can you do?", assume_yes=True)
+    assert "I build things." in capsys.readouterr().out
+    assert code == 1  # nothing ran, so there is no "done" to report

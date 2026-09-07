@@ -100,11 +100,16 @@ After the run you see what changed and decide:
     index.html | 27 +++++++++++++++++++++++++++
     styles.css |  8 ++++++++
     2 files changed, 35 insertions(+)
-? Keep these changes? (Y/n) y
-  kept — review them with git diff, commit when you're happy
+? Keep these changes?
+  › 1. Keep everything
+    2. Choose file by file  2 changed
+    3. Revert everything
 ```
 
-Answering `n` restores every file the run touched — additions deleted, edits and deletions put
+Choosing **file by file** walks each changed file in turn, with the option to see its patch before
+deciding — for when a step delivers the feature you asked for *and* a refactor you did not.
+
+Reverting restores every file the run touched — additions deleted, edits and deletions put
 back — from a snapshot taken before it started. The snapshot is of your *working tree*, not of the
 last commit, so uncommitted work you had in progress comes back exactly as it was.
 
@@ -291,6 +296,7 @@ them when you're done.
 | `/rounds [n]` | review rounds before a WorkItem escalates (default 3) |
 | `/ask [on\|off]` | whether the driver asks clarifying questions before planning (default on) |
 | `/status` | show all of the above |
+| `/clean` | remove throwaway workspaces left by `memory`/`github` runs |
 | `/smoke` | offline pipeline self-check |
 | `/quit` (`/exit`, Ctrl-D) | leave |
 
@@ -337,18 +343,29 @@ created for real.
 
 Per WorkItem the shell prints its state, PR number, and how many review rounds it took.
 
-## 8. Automation without a TTY
+## 8. One-shot and headless
 
-The shell is the only interactive entry point; there is no flag-driven equivalent. For CI, the
-pass-through smoke test has its own console script that needs no terminal:
+Give `sf` a request as an argument and it does that one thing and exits, without opening the shell:
+
+```bash
+sf "change DEFAULT_TIMEOUT to 90 in settings.py"
+sf "add a --verbose flag to the CLI" --yes          # unattended: no questions
+sf "run the linter over src/" --project ~/code/app  # somewhere other than the cwd
+```
+
+`--yes` accepts the proposed plan and keeps the result without asking, which is what makes it
+usable from a script or CI. The exit code is `0` when the objective is `done` and `1` otherwise, so
+it works as a gate. Without `--yes` you still get the plan and the keep/revert prompt — the same
+experience as the shell, minus the loop.
+
+The pass-through smoke test has its own console script and needs no request at all:
 
 ```bash
 sf-smoke        # objective → worker → PR → merge, exits non-zero on failure
 ```
 
 That is what the `build` and `image` CI jobs run against the installed wheel and the container
-image, and it is the container's default `CMD`. To script anything richer, drive the driver from
-Python — see [`running-the-loop.md`](running-the-loop.md).
+image, and it is the container's default `CMD`.
 
 ## Troubleshooting
 
@@ -370,9 +387,10 @@ rejected answer is re-asked rather than abandoning what you were doing.
 ## Known gaps
 
 - No live GitHub loop until the git-remote isolation backend lands (see §6).
-- Under `/forge memory` the outcome doesn't report the workspace path (locally it does).
+
 - Free text is planned as an objective, not matched to a run: the shell won't infer "make me a
   repo" and open `/new-repo` for you. Prepackaged workflows are reached by command.
 - With `/forge memory` or `github`, steps still get separate scratch workspaces and cannot build on
   each other. Locally they share the project, so they can.
-- Nothing removes `$TMPDIR/osf-*` workspaces left by the non-local forges.
+- `$TMPDIR/osf-*` workspaces from `memory`/`github` runs are kept so their output can be
+  inspected; `/clean` removes them when you're done.

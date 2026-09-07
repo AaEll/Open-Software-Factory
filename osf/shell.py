@@ -118,6 +118,8 @@ class Shell:
     def __init__(self, session: Session | None = None) -> None:
         self.session = session or Session()
         self.running = True
+        self.assume_yes = False  # unattended: take the default answer to every question
+        self.last_state = ""  # the outcome of the most recent run, for the exit code
         self.commands: dict[str, Command] = {}
         for command in _COMMANDS:
             self.commands[command.name] = command
@@ -316,6 +318,9 @@ class Shell:
         for line in isolation.diff_since(workspace, before, stat=True).splitlines():
             self.say(f"    {line.strip()}")
 
+        if self.assume_yes:
+            self.note("kept — review them with git diff, commit when you're happy")
+            return
         choice = select(
             "Keep these changes?",
             (
@@ -381,11 +386,13 @@ class Shell:
 
     def negotiate(self, request: str) -> ProposedPlan | None:
         """Let the driver ask what it needs, then revise its plan until the user accepts."""
-        answers = self.interview(request) if self.session.ask else []
+        answers = self.interview(request) if self.session.ask and not self.assume_yes else []
         exchanges: list[Exchange] = []
         while True:
             plan = self.propose(request, exchanges, answers)
             self._show_plan(plan)
+            if self.assume_yes:
+                return plan
             answer = text(
                 "Run this? (Enter to accept, or say what to change)", required=False
             )
@@ -513,6 +520,7 @@ class Shell:
     def _report(
         self, outcome: ObjectiveOutcome, cost_usd: float = 0.0, tokens: int = 0
     ) -> None:
+        self.last_state = outcome.state
         colour = STYLE.green if outcome.state == "done" else STYLE.red
         if cost_usd:
             spent = f"  {STYLE.dim(f'${cost_usd:.4f}')}"
@@ -728,3 +736,28 @@ def default_model() -> ModelRef | None:
     from osf.engines.fireworks import DEFAULT_MODEL, api_key
 
     return DEFAULT_MODEL if api_key() else None
+
+
+def run_once(session: Session, request: str, *, assume_yes: bool = False) -> int:
+    """Handle one request without the shell, for scripts and CI.
+
+    `assume_yes` answers the two questions a run asks — accept the plan, keep the result — so an
+    unattended caller is not blocked on a prompt it cannot see. Without it the questions are still
+    asked, which is what makes `sf "…"` usable by hand as well.
+    """
+    shell = Shell(session)
+    if assume_yes:
+        shell.assume_yes = True
+    shell.say(STYLE.bold(BANNER))
+    try:
+        shell.handle(request)
+    except Cancelled:
+        shell.note("cancelled")
+        return 1
+    except ValueError as exc:
+        shell.error(str(exc))
+        return 1
+    except Exception as exc:
+        shell.error(f"{type(exc).__name__}: {exc}")
+        return 1
+    return 0 if shell.last_state == "done" else 1
