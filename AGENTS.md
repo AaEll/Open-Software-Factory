@@ -34,11 +34,19 @@ python -m evals.efactory_live   # live eval; needs FIREWORKS_API_KEY in .env
 
 ## Tests that touch a model
 
-Never call a live API from the test suite. Engine adapters are covered by replaying recorded
-responses (`tests/fixtures/fireworks/`, see its README) through an httpx mock transport, so CI
-needs no key and costs nothing. Re-record deliberately with `python -m evals.record_fireworks`.
-The offline `osf/local/` stand-ins remain the cheapest smoke path; the fixtures cover the code
-that actually talks to a model, which the stand-ins never exercise.
+Never call a live API from the test suite. There are three offline layers, and a change usually
+wants the one that matches what it risks breaking:
+
+- **`osf/local/` stand-ins** — the cheapest smoke path, proving the pipeline holds together.
+- **Recorded responses** (`tests/fixtures/fireworks/`, `tests/test_integration.py`) — real API
+  bodies replayed through an httpx mock transport, proving our adapters cope with what a model
+  actually returns, fences and all. Re-record deliberately with `python -m evals.record_fireworks`.
+- **Canned scripts** (`tests/canned.py`, `tests/test_flows.py`) — a named series of responses for
+  one flow, written by hand. Use these for the paths that are impractical to record: a model that
+  answers badly and is corrected, a refused tool call it recovers from, a check that fails and then
+  passes.
+
+All three run the real adapters; only the HTTP responses differ in origin.
 
 ## What a test is for
 

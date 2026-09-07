@@ -26,7 +26,7 @@ Open Software Factory
   plan  Build a single-page site for Mountain Brew with hero, hours and location.
     1. Create index.html and styles.css with the hero, hours, and a map link.  → index.html, styles.css
        ✓ runs: python -c "assert 'Mountain Brew' in open('index.html').read()"
-? Run this? (Enter to accept, or say what to change) ›
+? Approve this plan? (Enter to accept, or say what to change) ›
   working: Create index.html and styles.css…
   mountain-brew: done  8.2k tokens
   changed in ~/mountain-brew

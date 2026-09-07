@@ -15,10 +15,10 @@ import json
 import sys
 from pathlib import Path
 
-import httpx
 import pytest
+from canned import ScriptedClient
 
-from osf.engines.fireworks import BASE_URL, DEFAULT_MODEL, FireworksPlanner, FireworksRuntime
+from osf.engines.fireworks import DEFAULT_MODEL, FireworksPlanner, FireworksRuntime
 from osf.prompts import Style
 from osf.shell import Session, Shell
 
@@ -39,36 +39,11 @@ def worker(name: str) -> list[str]:
     return [path.stem for path in steps]
 
 
-class Replay:
-    """Serves recorded chat-completion bodies in order, recording what was asked."""
+class Replay(ScriptedClient):
+    """Serves recorded chat-completion bodies in order. Same transport as the canned scripts."""
 
     def __init__(self, *names: str) -> None:
-        self.bodies = [load(name) for name in names]
-        self.requests: list[dict] = []
-        self.exhausted = False
-
-    def client(self):
-        pytest.importorskip("openai")
-        from openai import OpenAI
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            self.requests.append(json.loads(request.content))
-            if not self.bodies:
-                # openai re-raises whatever the transport throws as APIConnectionError, which
-                # hides the real cause; the flag is checked after the run instead.
-                self.exhausted = True
-                raise AssertionError("the engine made more calls than there are fixtures")
-            return httpx.Response(200, json=self.bodies.pop(0))
-
-        return OpenAI(
-            base_url=BASE_URL,
-            api_key="test-key",
-            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
-
-    @property
-    def systems(self) -> list[str]:
-        return [request["messages"][0]["content"] for request in self.requests]
+        super().__init__([load(name) for name in names])
 
 
 @pytest.fixture(autouse=True)
