@@ -89,6 +89,7 @@ async def execute(
     forge: Forge,
     reviewer: Reviewer,
     max_rounds: int = 3,
+    on_progress: Callable[[str], None] | None = None,
 ) -> ObjectiveOutcome:
     """Drive a prepackaged plan through the reconcile loop.
 
@@ -107,6 +108,8 @@ async def execute(
         skills=plan.skills,
         max_rounds=max_rounds,
     )
+    if on_progress is not None:
+        driver.on_progress(on_progress)
     return await driver.run(plan.objective)
 
 

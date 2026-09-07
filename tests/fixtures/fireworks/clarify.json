@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-09bc8f4e615e4643bfd78a19d9db24da",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"questions\": [\"What is the purpose: tribute, memorial, fun profile, or something else?\", \"What content must be included: photos, bio, stats, contact form, or gallery?\", \"What tone or mood: playful, elegant, cute, or sentimental?\"]}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "The user wants a landing page for their dog \"Pobrecita\". This is a creative/website project. I need to ask clarifying questions that would change the plan significantly. I can ask about:\n- Purpose of the landing page (fun, memorial, adoption, photo gallery, etc.)\n- Must-have content (photos, bio, contact info, etc.)\n- Style/mood (playful, elegant, cute, etc.)\n- Constraints (target audience, language, specific features)\n\nI can ask at most 3 questions. Short and answerable in a few words. I should not ask about tooling, hosting, or repository. I should ask what would change the plan.\n\nLet me think about what would most change a landing page:\n1. Purpose/goal of the page (memorial, tribute, fun, profile, etc.)\n2. Content they want included (photos, story, details)\n3. Tone/style or target audience\n\nBut I need to keep it to 3 questions max. Let me draft concise questions:\n- \"Is this a tribute, memorial, fun profile, or something else?\"\n- \"What content must be included: photos, bio, stats, contact form?\"\n- \"What tone/mood: playful, elegant, cute, sentimental?\"\n\nThese are good. They are short, answerable in a few words, and would change the plan significantly.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1788126257,
+  "model": "accounts/fireworks/models/kimi-k2p7-code",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 338,
+    "prompt_tokens": 138,
+    "total_tokens": 476,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 280,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "compute_units": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 280
+    }
+  }
+}

@@ -32,5 +32,8 @@ class DirectoryIsolation:
         )
         return ExecResult(exit_code=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
 
+    async def checkpoint(self, ws: Workspace, message: str) -> None:
+        return None  # a plain directory has no history to record into
+
     async def cleanup(self, ws: Workspace) -> None:
         return None

@@ -1,4 +1,4 @@
-"""In-memory forge (local reference).
+"""In-memory and null forges (local reference).
 
 Records PRs, comments, and merges in process memory instead of talking to GitHub. Checks
 always report success, since the local walking skeleton has no CI. Useful for driving the
@@ -51,3 +51,29 @@ class InMemoryForge:
 
     async def merge(self, pr: PrRef) -> None:
         self.prs[pr.number].merged = True
+
+
+class NoForge:
+    """No forge at all — for work that stays in the user's repository.
+
+    The driver's review loop still runs (a step is judged against its gate and retried), but there
+    is nothing to open, comment on, or merge. Working this way is the default: changes land in the
+    project you launched from, and pushing them anywhere is your decision, made with git.
+    """
+
+    async def create_repo(
+        self, repo: RepoRef, *, private: bool = True, description: str = ""
+    ) -> RepoRef:
+        return repo
+
+    async def open_pr(self, repo: RepoRef, branch: str, title: str, body: str) -> PrRef:
+        return PrRef(repo=repo, number=0)  # 0 reads as "no PR" everywhere it is displayed
+
+    async def comment(self, pr: PrRef, body: str, *, review: bool = False) -> None:
+        return None
+
+    async def checks(self, pr: PrRef) -> ChecksStatus:
+        return ChecksStatus(state="success")  # local work has no CI to wait on
+
+    async def merge(self, pr: PrRef) -> None:
+        return None

@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-d53f19b6a162408d94bf09fa9051aca0",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Done. Created `index.html` with a self-contained landing page for Pobrecita including styling, a treat counter, a contact form, and responsive layout.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "The file has been created successfully. I should now stop since the task was to create a self-contained index.html landing page for Pobrecita the dog, which I've done.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1788276033,
+  "model": "accounts/fireworks/models/kimi-k2p7-code",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 71,
+    "prompt_tokens": 4112,
+    "total_tokens": 4183,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 36,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "compute_units": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 695,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 36
+    }
+  }
+}

@@ -14,35 +14,102 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from osf.model import Objective, WorkItem
 from osf.types import ObjectiveId, RepoRef
 
-PLAN_SYSTEM = (
+ROUTE_SYSTEM = (
+    "You are the driver agent of an autonomous software factory, talking to a user at a prompt. "
+    "Decide what their message is, and reply with JSON only:\n"
+    '{"action": "reply|plan|run", "message": "...", "run": "<name>", "params": {"key": "value"}}\n'
+    "- `reply`: they are talking to you, not asking for work — a greeting, a question about what "
+    "you can do, small talk. Put your answer in `message`, one or two sentences, and offer what "
+    "you could build for them. Never invent a plan for a greeting.\n"
+    "- `run`: their request matches one of the workflows listed below. Name it in `run` and "
+    "prefill `params` with anything they already told you; leave out what they did not say — the "
+    "user will be asked for the rest.\n"
+    "- `plan`: anything else that is actual work to build or change.\n"
+    "When in doubt between reply and plan, prefer reply and ask them what they want built."
+)
+
+CLARIFY_SYSTEM = (
+    "You are the driver agent of an autonomous software factory. Before planning, decide what you "
+    "genuinely need to know about the user's request.\n"
+    'Reply with JSON only, no prose: {"questions": ["...", "..."]}\n'
+    "Rules: at most 3 questions, each one short and answerable in a few words. Ask only what would "
+    "change the plan — scope, must-have content, constraints. Never ask what you can reasonably "
+    "assume or decide yourself, and never ask about tooling, hosting, or the repository. If the "
+    "request is already clear enough to plan, return an empty list."
+)
+
+_PLAN_BASE = (
     "You are the driver agent of an autonomous software factory. Turn the user's request into a "
     "short delivery plan.\n"
     "Reply with JSON only, no prose, in this exact shape:\n"
-    '{"goal": "one sentence restating what to build", "steps": ['
-    '{"spec": "one self-contained unit of work", "files": ["files this step produces"]}]}\n'
-    "Rules: 1-3 steps. Each step is built by a separate agent in its own empty workspace, so a "
-    "step must stand alone and must not depend on files another step writes. A step's `files` are "
-    "its definition of done: list only files you are confident that step must produce (e.g. "
-    "index.html), relative to the repo root, and keep the list short — prefer fewer, surer files. "
-    "If the user gives feedback on a plan, return the whole revised plan, not a diff."
+    '{"goal": "one sentence restating what to build", "steps": [{"spec": "a unit of work", '
+    '"files": ["files it produces"], "check": "command proving it works"}]}\n'
+    "Rules: 1-3 steps. A step's `files` are its definition of done: list only files you are "
+    "confident that step must produce (e.g. index.html), relative to the repo root, and keep the "
+    "list short — prefer fewer, surer files. If the user gives feedback on a plan, return the "
+    "whole revised plan, not a diff.\n"
+    "`check` is optional but valuable: a single short command, run from the repository root, that "
+    "exits 0 when the step actually worked — `python -m pytest -q tests/test_x.py`, "
+    "`python app.py --help`, `node --check index.js`. Prefer something that exercises the change "
+    "over something that only proves a file parses. Omit it when no honest check exists; never "
+    "invent a test file that the step does not create. The command must be read-only and quick: "
+    "no installs, no network, no deletions, nothing that changes the project.\n"
+)
+# Whether steps share a workspace is a property of the isolation backend, and it changes what a
+# plan may assume: in the user's own repo each step sees the last one's work, in throwaway
+# per-step workspaces it does not.
+_PLAN_SHARED = (
+    "The steps run in order in one repository, each seeing the files the previous steps wrote, so "
+    "a later step may extend or refine earlier work. Existing files in the repository may be "
+    "edited — say so in the step's spec when that is the intent.\n"
+    "Work with the project as it is: put changes in the files that already hold that behaviour, "
+    "and name those files in the step. Do not restructure, rename or split existing files unless "
+    "the user asked for it — moving an entry point into a new file breaks the way they run it."
+)
+_PLAN_ISOLATED = (
+    "Each step is built by a separate agent in its own empty workspace, so a step must stand alone "
+    "and must not depend on files another step writes."
+)
+
+
+def plan_system(*, shared_workspace: bool = False, context: str = "") -> str:
+    """The planning prompt: whether steps share a workspace, and what the project already holds."""
+    system = _PLAN_BASE + (_PLAN_SHARED if shared_workspace else _PLAN_ISOLATED)
+    return f"{system}\n\n{context}" if context else system
+
+
+PLAN_SYSTEM = plan_system()  # the isolated default, kept for callers that don't care
+
+RETRY_NUDGE = (
+    "That reply was not usable. Reply with JSON only — no prose, no code fences — in exactly the "
+    "shape described."
 )
 
 _JSON = re.compile(r"\{.*\}", re.DOTALL)
 
+# How an engine adapter runs one completion: (system prompt, messages, max tokens) -> reply text.
+Complete = Callable[[str, list[dict], int], str]
+
 
 @dataclass(frozen=True, slots=True)
 class Step:
-    """One unit of work and the files it is expected to produce."""
+    """One unit of work, the files it should produce, and how to tell it worked.
+
+    `check` is a command run in the workspace after the step. Files existing is a weak definition
+    of done — an entry point can be gutted while its file still exists — so a step may also say
+    what should run. The user sees and approves the command with the plan before anything runs it.
+    """
 
     spec: str
     files: list[str] = field(default_factory=list)
+    check: str = ""
 
     @property
     def criteria(self) -> list[str]:
@@ -81,6 +148,15 @@ class ProposedPlan:
             for index, step in enumerate(steps, start=1)
         ]
 
+    def checks_by_item(self, objective_id: ObjectiveId) -> dict[str, str]:
+        """Each WorkItem's command, for the steps that proposed one."""
+        steps = self.steps or [Step(self.goal)]
+        return {
+            f"{objective_id}-{index}": step.check
+            for index, step in enumerate(steps, start=1)
+            if step.check
+        }
+
     def criteria_by_item(self, objective_id: ObjectiveId) -> dict[str, list[str]]:
         """Each WorkItem's own gate.
 
@@ -93,14 +169,75 @@ class ProposedPlan:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class Decision:
+    """What the driver decided a message was: chat, a workflow to run, or work to plan."""
+
+    action: str  # "reply" | "run" | "plan"
+    message: str = ""
+    run: str = ""
+    params: dict[str, str] = field(default_factory=dict)
+
+
+def route_catalog(runs: Sequence[tuple[str, str, Sequence[str]]]) -> str:
+    """Describe the available workflows so the driver can pick one and prefill it."""
+    if not runs:
+        return "No workflows are available; never choose the run action."
+    lines = [
+        f"- {name}: {description} (params: {', '.join(params) or 'none'})"
+        for name, description, params in runs
+    ]
+    return "Workflows you may run:\n" + "\n".join(lines)
+
+
+def parse_decision(text: str) -> Decision:
+    """Read a routing decision, defaulting to planning when the reply is unusable."""
+    match = _JSON.search(text or "")
+    if not match:
+        return Decision(action="plan")
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return Decision(action="plan")
+    action = str(data.get("action") or "plan").strip().lower()
+    if action not in ("reply", "run", "plan"):
+        action = "plan"
+    params = data.get("params")
+    return Decision(
+        action=action,
+        message=str(data.get("message") or "").strip(),
+        run=str(data.get("run") or "").strip(),
+        params={str(k): str(v) for k, v in params.items()} if isinstance(params, dict) else {},
+    )
+
+
 # One round of the negotiation: what was proposed, and what the user said about it.
 Exchange = tuple[ProposedPlan, str]
+# A clarifying question and what the user said back.
+Answer = tuple[str, str]
 
 
 class Planner(Protocol):
-    """Proposes a plan for a request, revising it in light of the user's feedback."""
+    """The driver agent: decides what a message is, asks what it needs, then plans.
 
-    def propose(self, request: str, exchanges: Sequence[Exchange] = ()) -> ProposedPlan: ...
+    `context` describes the project being worked on. A planner that cannot see the repository
+    plans against an imagined one — it will happily route work into a file that does not exist
+    and leave the real entry point stranded.
+    """
+
+    def route(self, request: str, catalog: str = "", context: str = "") -> Decision: ...
+
+    def clarify(self, request: str, context: str = "") -> list[str]: ...
+
+    def propose(
+        self,
+        request: str,
+        exchanges: Sequence[Exchange] = (),
+        answers: Sequence[Answer] = (),
+        *,
+        shared_workspace: bool = False,
+        context: str = "",
+    ) -> ProposedPlan: ...
 
 
 class StaticPlanner:
@@ -111,24 +248,66 @@ class StaticPlanner:
     fails forever chasing a file that was never meant to exist.
     """
 
-    def propose(self, request: str, exchanges: Sequence[Exchange] = ()) -> ProposedPlan:
+    def route(self, request: str, catalog: str = "", context: str = "") -> Decision:
+        # With no model there is no judgement to apply: treat everything as work to plan, which
+        # is what the shell did before routing existed.
+        return Decision(action="plan")
+
+    def clarify(self, request: str, context: str = "") -> list[str]:
+        return []  # with no model there is nobody to ask, and nobody to use the answers
+
+    def propose(
+        self,
+        request: str,
+        exchanges: Sequence[Exchange] = (),
+        answers: Sequence[Answer] = (),
+        *,
+        shared_workspace: bool = False,
+        context: str = "",
+    ) -> ProposedPlan:
+        # Answers are deliberately dropped: with no model to interpret them, folding them into the
+        # spec would just paste an interview transcript in as the work to do.
         steps = [Step(request)]
         for _plan, feedback in exchanges:
             steps.append(Step(feedback))
         return ProposedPlan(goal=request, steps=steps)
 
 
-def build_messages(request: str, exchanges: Sequence[Exchange]) -> list[dict[str, str]]:
+def compose_request(request: str, answers: Sequence[Answer] = ()) -> str:
+    """Fold the answers to the driver's questions into the request it plans from."""
+    if not answers:
+        return request
+    lines = "\n".join(f"- {question} {answer}" for question, answer in answers)
+    return f"{request}\n\nAnswers to your questions:\n{lines}"
+
+
+def build_messages(
+    request: str, exchanges: Sequence[Exchange], answers: Sequence[Answer] = ()
+) -> list[dict[str, str]]:
     """Render the negotiation as a chat transcript the engines can replay."""
-    messages = [{"role": "user", "content": request}]
+    messages = [{"role": "user", "content": compose_request(request, answers)}]
     for plan, feedback in exchanges:
         messages.append({"role": "assistant", "content": render_json(plan)})
         messages.append({"role": "user", "content": feedback})
     return messages
 
 
+def parse_questions(text: str) -> list[str]:
+    """Read the driver's questions out of a model reply; no questions is a valid answer."""
+    match = _JSON.search(text or "")
+    if not match:
+        return []
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return []
+    return [str(q).strip() for q in data.get("questions") or [] if str(q).strip()][:3]
+
+
 def render_json(plan: ProposedPlan) -> str:
-    steps = [{"spec": step.spec, "files": step.files} for step in plan.steps]
+    steps = [
+        {"spec": step.spec, "files": step.files, "check": step.check} for step in plan.steps
+    ]
     return json.dumps({"goal": plan.goal, "steps": steps})
 
 
@@ -154,7 +333,9 @@ def parse_plan(text: str, *, fallback_goal: str) -> ProposedPlan:
 def _parse_step(raw: object) -> Step:
     if isinstance(raw, dict):
         spec = raw.get("spec") or raw.get("step") or raw.get("description") or ""
-        return Step(str(spec).strip(), _strings(raw.get("files")))
+        return Step(
+            str(spec).strip(), _strings(raw.get("files")), str(raw.get("check") or "").strip()
+        )
     return Step(str(raw).strip())
 
 
@@ -162,3 +343,35 @@ def _strings(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def propose_with_retry(
+    complete: Complete,
+    request: str,
+    exchanges: Sequence[Exchange] = (),
+    answers: Sequence[Answer] = (),
+    *,
+    attempts: int = 2,
+    shared_workspace: bool = False,
+    context: str = "",
+) -> ProposedPlan:
+    """Ask an engine for a plan, nudging it once if the reply isn't a usable plan.
+
+    Models drift out of JSON now and then — a stray sentence, a truncated object. One corrective
+    round trip recovers nearly all of it, and is far cheaper than dropping the user's request.
+    """
+    system = plan_system(shared_workspace=shared_workspace, context=context)
+    messages = build_messages(request, exchanges, answers)
+    last: ValueError | None = None
+    for _attempt in range(attempts):
+        reply = complete(system, messages, 2000)
+        try:
+            return parse_plan(reply, fallback_goal=request)
+        except ValueError as exc:
+            last = exc
+            messages = [
+                *messages,
+                {"role": "assistant", "content": reply},
+                {"role": "user", "content": RETRY_NUDGE},
+            ]
+    raise last if last else ValueError("the planner did not return a plan")
