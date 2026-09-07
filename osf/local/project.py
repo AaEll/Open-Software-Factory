@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 from osf.isolation import ExecResult
@@ -90,22 +91,34 @@ class ProjectIsolation:
         flag = "--stat" if stat else "--patch"
         return self._git(ws, "diff", flag, tree, now, scratch=True).stdout
 
-    def restore(self, ws: Workspace, tree: str) -> list[str]:
-        """Put the working tree back to a captured snapshot. Returns the paths it touched."""
+    def restore(self, ws: Workspace, tree: str, paths: Sequence[str] | None = None) -> list[str]:
+        """Put the working tree back to a captured snapshot. Returns the paths it touched.
+
+        `paths` restores only those files, leaving every other change in place — which is what
+        lets a user keep the feature and reject the refactor that came with it.
+        """
         now = self.snapshot(ws)
         listing = self._git(ws, "diff", "--name-status", tree, now, scratch=True).stdout
+        wanted = set(paths) if paths is not None else None
         touched = []
         for line in listing.splitlines():
             if not line:
                 continue
             status, _, path = line.partition("\t")
             path = path.strip()
+            if wanted is not None and path not in wanted:
+                continue
             if status.startswith("A"):  # added since the snapshot -> it should not exist
                 Path(ws.path, path).unlink(missing_ok=True)
             else:  # modified or deleted -> take the snapshot's version back
                 self._git(ws, "checkout", tree, "--", path)
             touched.append(path)
         return touched
+
+    def diff_for(self, ws: Workspace, tree: str, path: str) -> str:
+        """The patch for one file, for a user deciding whether to keep it."""
+        now = self.snapshot(ws)
+        return self._git(ws, "diff", tree, now, "--", path, scratch=True).stdout
 
     # --- plumbing -------------------------------------------------------------------------
 

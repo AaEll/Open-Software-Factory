@@ -29,6 +29,9 @@ class AgentResult:
     outcome: Literal["completed", "failed", "interrupted"]
     transcript: list[AgentEvent]
     cost_usd: float
+    # Providers that do not publish a price still report usage, and tokens spent is the honest
+    # thing to show rather than a cost of zero.
+    tokens: int = 0
 
 
 class AgentRuntime(Protocol):

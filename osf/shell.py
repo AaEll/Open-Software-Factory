@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import os
+import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -261,9 +263,12 @@ class Shell:
             decompose=lambda _objective: items,
             max_rounds=self.session.max_rounds,
         )
+        driver.on_progress(lambda message: self.note(message))
         before = self._snapshot(isolation)
-        self._report(asyncio.run(driver.run(plan.objective(objective_id, repo))))
+        outcome = asyncio.run(driver.run(plan.objective(objective_id, repo)))
+        self._report(outcome, driver.cost_usd, driver.tokens)
         self._settle(isolation, before)
+        self._report_workspaces(isolation)
 
     def _target(self) -> RepoRef | None:
         """What the work is aimed at: your project when local, a named repo otherwise."""
@@ -298,7 +303,7 @@ class Shell:
         return isolation.snapshot(Workspace(str(isolation.root), str(isolation.root)))
 
     def _settle(self, isolation: IsolationBackend, before: str | None) -> None:
-        """Show what changed in the project and let the user keep it or put it back."""
+        """Show what changed in the project and let the user keep it, revert it, or choose."""
         if before is None or not isinstance(isolation, ProjectIsolation):
             return
         workspace = Workspace(str(isolation.root), str(isolation.root))
@@ -306,14 +311,73 @@ class Shell:
         if not changed:
             self.note("no files changed")
             return
+
         self.say(f"  {STYLE.bold('changed')} in {isolation.root}")
         for line in isolation.diff_since(workspace, before, stat=True).splitlines():
             self.say(f"    {line.strip()}")
-        if confirm("Keep these changes?"):
+
+        choice = select(
+            "Keep these changes?",
+            (
+                Choice("keep", "Keep everything"),
+                Choice("choose", "Choose file by file", f"{len(changed)} changed"),
+                Choice("revert", "Revert everything"),
+            ),
+        )
+        if choice == "keep":
             self.note("kept — review them with git diff, commit when you're happy")
             return
-        restored = isolation.restore(workspace, before)
-        self.note(f"reverted {len(restored)} file(s) to how they were")
+        if choice == "revert":
+            restored = isolation.restore(workspace, before)
+            self.note(f"reverted {len(restored)} file(s) to how they were")
+            return
+        self._choose_files(isolation, workspace, before, changed)
+
+    def _report_workspaces(self, isolation: IsolationBackend) -> None:
+        """Say where a throwaway run put its work, so it is not left to guess."""
+        if isinstance(isolation, ProjectIsolation):
+            return  # the project is where it landed, and the diff already said so
+        newest = sorted(
+            Path(tempfile.gettempdir()).glob("osf-*"), key=lambda p: p.stat().st_mtime, reverse=True
+        )[:1]
+        for path in newest:
+            self.note(f"workspace: {path}   (/clean removes old ones)")
+
+    def _choose_files(
+        self,
+        isolation: ProjectIsolation,
+        workspace: Workspace,
+        before: str,
+        changed: list[str],
+    ) -> None:
+        """Walk the changed files one at a time, reverting the ones the user rejects.
+
+        The case this exists for: a step delivers the feature you asked for *and* a refactor you
+        did not. All-or-nothing makes you take both or lose the work.
+        """
+        rejected = []
+        for path in changed:
+            answer = select(
+                f"{path}?",
+                (
+                    Choice("keep", "Keep"),
+                    Choice("revert", "Revert this file"),
+                    Choice("diff", "Show the diff first"),
+                ),
+            )
+            if answer == "diff":
+                for line in isolation.diff_for(workspace, before, path).splitlines():
+                    self.say(f"    {STYLE.dim(line)}")
+                answer = select(
+                    f"{path}?", (Choice("keep", "Keep"), Choice("revert", "Revert this file"))
+                )
+            if answer == "revert":
+                rejected.append(path)
+
+        if rejected:
+            isolation.restore(workspace, before, rejected)
+        kept = len(changed) - len(rejected)
+        self.note(f"kept {kept} file(s), reverted {len(rejected)}")
 
     def negotiate(self, request: str) -> ProposedPlan | None:
         """Let the driver ask what it needs, then revise its plan until the user accepts."""
@@ -423,6 +487,7 @@ class Shell:
                 forge=self.session.make_forge(),
                 reviewer=AcceptanceReviewer(list(plan.objective.acceptance_criteria)),
                 max_rounds=self.session.max_rounds,
+                on_progress=self.note,
             )
         )
         self._report(outcome)
@@ -445,9 +510,17 @@ class Shell:
         git_init(target)
         return ProjectIsolation(target)
 
-    def _report(self, outcome: ObjectiveOutcome) -> None:
+    def _report(
+        self, outcome: ObjectiveOutcome, cost_usd: float = 0.0, tokens: int = 0
+    ) -> None:
         colour = STYLE.green if outcome.state == "done" else STYLE.red
-        self.say(f"  {outcome.objective_id}: {colour(outcome.state)}")
+        if cost_usd:
+            spent = f"  {STYLE.dim(f'${cost_usd:.4f}')}"
+        elif tokens:  # providers without a published price still report usage
+            spent = f"  {STYLE.dim(f'{tokens / 1000:.1f}k tokens')}"
+        else:
+            spent = ""
+        self.say(f"  {outcome.objective_id}: {colour(outcome.state)}{spent}")
         for item in outcome.items:
             # PR#0 is the null forge's stand-in — local work has no pull request to point at.
             pr = f"PR#{item.pr.number}, " if item.pr and item.pr.number else ""
@@ -577,6 +650,23 @@ def _cmd_status(shell: Shell, _rest: str) -> None:
     shell.note(f"ask:    {'on' if session.ask else 'off'}")
 
 
+def _cmd_clean(shell: Shell, _rest: str) -> None:
+    """Remove throwaway workspaces. They are kept after a run so their output can be inspected."""
+    workspaces = sorted(Path(tempfile.gettempdir()).glob("osf-*"))
+    if not workspaces:
+        shell.note("no throwaway workspaces to remove")
+        return
+    if not confirm(f"Remove {len(workspaces)} workspace(s) under {tempfile.gettempdir()}?"):
+        shell.note("kept")
+        return
+    removed = 0
+    for path in workspaces:
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+    shell.note(f"removed {removed} workspace(s)")
+
+
 def _cmd_smoke(shell: Shell, _rest: str) -> None:
     from osf.smoke import run_smoke
 
@@ -605,6 +695,7 @@ _COMMANDS = (
     Command("rounds", "[n]", "review rounds before escalating", _cmd_rounds),
     Command("ask", "[on|off]", "let the driver ask before planning", _cmd_ask),
     Command("status", "", "show the session settings", _cmd_status),
+    Command("clean", "", "remove throwaway workspaces left by memory/github runs", _cmd_clean),
     Command("smoke", "", "run the offline pipeline self-check", _cmd_smoke),
     Command("quit", "", "leave the shell", _cmd_quit),
 )

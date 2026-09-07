@@ -163,6 +163,7 @@ class FireworksRuntime:
     def _run_loop(self, workspace: Workspace, prompt: str) -> AgentResult:
         client = make_client(self._client)
         toolbox = Toolbox(workspace)
+        tokens = 0
         messages: list[dict] = [
             {"role": "system", "content": worker_system(workspace, model_id=self._model.model_id)},
             {"role": "user", "content": prompt},
@@ -176,11 +177,14 @@ class FireworksRuntime:
                 tools=_TOOLS,
                 max_tokens=16000,
             )
+            tokens += getattr(response.usage, "total_tokens", 0) or 0
             message = response.choices[0].message
             messages.append(message.model_dump(exclude_none=True))
 
             if not message.tool_calls:
-                return AgentResult(outcome="completed", transcript=transcript, cost_usd=0.0)
+                return AgentResult(
+                    outcome="completed", transcript=transcript, cost_usd=0.0, tokens=tokens
+                )
 
             for call in message.tool_calls:
                 args = json.loads(call.function.arguments)
@@ -192,7 +196,9 @@ class FireworksRuntime:
                 if is_error:
                     transcript.append(AgentEvent(kind="error", data={"message": outcome}))
 
-        return AgentResult(outcome="failed", transcript=transcript, cost_usd=0.0)
+        return AgentResult(
+            outcome="failed", transcript=transcript, cost_usd=0.0, tokens=tokens
+        )
 
 
 class FireworksPlanner:

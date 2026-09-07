@@ -78,11 +78,18 @@ class Driver:
         self._decompose = decompose
         self._skills = skills
         self._max_rounds = max_rounds
+        self._progress: Callable[[str], None] = lambda _message: None
+        self.cost_usd = 0.0
+        self.tokens = 0
 
     async def run(self, objective: Objective) -> ObjectiveOutcome:
         outcomes = [await self._reconcile(objective, item) for item in self._decompose(objective)]
         done = all(o.state == "merged" for o in outcomes)
         return ObjectiveOutcome(objective.id, "done" if done else "escalated", outcomes)
+
+    def on_progress(self, callback: Callable[[str], None]) -> None:
+        """Report what the loop is doing, so a long run is not a silent one."""
+        self._progress = callback
 
     async def _reconcile(self, objective: Objective, item: WorkItem) -> WorkItemOutcome:
         branch = f"osf/{item.id}"
@@ -91,6 +98,9 @@ class Driver:
         feedback = ""
 
         for round_ in range(1, self._max_rounds + 1):
+            label = f"{item.spec[:60]}…" if len(item.spec) > 60 else item.spec
+            suffix = f" (round {round_})" if round_ > 1 else ""
+            self._progress(f"working: {label}{suffix}")
             await self._dispatch_worker(workspace, item, feedback)
             pr = pr or await self._forge.open_pr(
                 objective.repo, branch, title=f"feat: {item.spec}", body=item.spec
@@ -103,6 +113,7 @@ class Driver:
                 return WorkItemOutcome(item.id, "merged", pr, round_)
 
             reason = review.comment or f"checks are {checks.state}"
+            self._progress(f"not yet: {reason.splitlines()[0][:80]}")
             await self._forge.comment(pr, f"Changes requested: {reason}", review=True)
             feedback = reason
 
@@ -114,7 +125,9 @@ class Driver:
         if self._skills is not None and item.skills:
             prompt = apply_skills(prompt, self._skills, item.skills)
         await self._runtime.prompt(session, prompt)
-        await self._runtime.result(session)
+        result = await self._runtime.result(session)
+        self.cost_usd += result.cost_usd
+        self.tokens += result.tokens
         await self._isolation.checkpoint(workspace, f"feat: {item.spec}")
 
 

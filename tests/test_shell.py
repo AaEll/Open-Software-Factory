@@ -525,3 +525,56 @@ def test_an_offline_driver_routes_everything_to_planning(capsys):
     # StaticPlanner has no judgement to apply, so it must not pretend to converse.
     out = run_shell("/repo me/site\nhi bot\n\n/quit\n", capsys)
     assert "planning…" in out
+
+
+# --- progress and cost ---------------------------------------------------------------------------
+
+
+def test_a_long_run_reports_what_it_is_doing(capsys, monkeypatch):
+    """A run that prints nothing until it finishes looks like a hang."""
+    _plan(monkeypatch, ProposedPlan("Build it", [Step("Write index.html", ["index.html"])]))
+    out = run_shell("/repo me/site\nbuild a landing page for demo.osf\n\n/quit\n", capsys)
+    assert "working: Write index.html" in out
+
+
+def test_usage_is_reported_when_the_provider_publishes_no_price(capsys, monkeypatch):
+    from osf.driver import Driver
+
+    _plan(monkeypatch, ProposedPlan("Build it", [Step("Write index.html", ["index.html"])]))
+    original = Driver.run
+
+    async def run_and_pretend_it_cost_something(self, objective):
+        outcome = await original(self, objective)
+        self.tokens = 16_800
+        return outcome
+
+    monkeypatch.setattr(Driver, "run", run_and_pretend_it_cost_something)
+    out = run_shell("/repo me/site\nbuild a landing page for demo.osf\n\n/quit\n", capsys)
+    assert "16.8k tokens" in out
+
+
+def test_clean_removes_throwaway_workspaces_after_asking(capsys, monkeypatch, tmp_path):
+    """These accumulate one directory per work item; a real machine had 2,216 of them."""
+    monkeypatch.setattr("osf.shell.tempfile.gettempdir", lambda: str(tmp_path))
+    for name in ("osf-site-aaa", "osf-widgets-bbb"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "not-ours").mkdir()
+
+    out = run_shell("/clean\ny\n/quit\n", capsys)
+    assert "removed 2 workspace(s)" in out
+    assert not (tmp_path / "osf-site-aaa").exists()
+    assert (tmp_path / "not-ours").is_dir()  # only ours
+
+
+def test_clean_can_be_declined(capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr("osf.shell.tempfile.gettempdir", lambda: str(tmp_path))
+    (tmp_path / "osf-site-aaa").mkdir()
+
+    out = run_shell("/clean\nn\n/quit\n", capsys)
+    assert "kept" in out
+    assert (tmp_path / "osf-site-aaa").is_dir()
+
+
+def test_clean_with_nothing_to_do(capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr("osf.shell.tempfile.gettempdir", lambda: str(tmp_path))
+    assert "no throwaway workspaces" in run_shell("/clean\n/quit\n", capsys)

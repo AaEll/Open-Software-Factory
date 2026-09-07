@@ -39,6 +39,7 @@ class TempdirIsolation:
         await self._git(ws.path, "commit", "-q", "-m", message, allow_failure=True)
 
     async def cleanup(self, ws: Workspace) -> None:
+        """Delete the throwaway workspace. Safe because we created it and nobody else uses it."""
         await asyncio.to_thread(shutil.rmtree, ws.path, True)
 
     async def _git(self, path: str, *args: str, allow_failure: bool = False) -> None:

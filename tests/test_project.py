@@ -159,10 +159,10 @@ def test_gitignored_files_are_invisible_to_snapshots(isolation, workspace, repo:
 def test_a_second_run_is_measured_from_the_first(capsys, repo: Path, monkeypatch):
     """Each run reports only its own changes, not everything since the session began."""
     session = Session(project=repo, forge="local")
-    run_shell("Create a landing page for demo.osf\n\ny\n/quit\n", capsys, session)
+    run_shell("Create a landing page for demo.osf\n\n1\n/quit\n", capsys, session)
     assert (repo / "index.html").is_file()
 
-    out = run_shell("Create a landing page for demo.osf\n\ny\n/quit\n", capsys, session)
+    out = run_shell("Create a landing page for demo.osf\n\n1\n/quit\n", capsys, session)
     # The scripted worker rewrites the same file with the same content, so nothing differs.
     assert "no files changed" in out
 
@@ -193,7 +193,7 @@ def run_shell(script: str, capsys, session: Session) -> str:
 
 def test_a_local_run_edits_the_project_and_keeps_the_change(capsys, repo: Path):
     session = Session(project=repo, forge="local")
-    out = run_shell("Create a landing page for demo.osf\n\ny\n/quit\n", capsys, session)
+    out = run_shell("Create a landing page for demo.osf\n\n1\n/quit\n", capsys, session)
     assert "changed" in out
     assert "index.html" in out
     assert "kept" in out
@@ -202,7 +202,7 @@ def test_a_local_run_edits_the_project_and_keeps_the_change(capsys, repo: Path):
 
 def test_declining_puts_the_project_back(capsys, repo: Path):
     session = Session(project=repo, forge="local")
-    out = run_shell("Create a landing page for demo.osf\n\nn\n/quit\n", capsys, session)
+    out = run_shell("Create a landing page for demo.osf\n\n3\n/quit\n", capsys, session)
     assert "reverted 1 file(s)" in out
     assert not (repo / "index.html").exists()
     assert git(repo, "status", "--short") == ""
@@ -210,14 +210,14 @@ def test_declining_puts_the_project_back(capsys, repo: Path):
 
 def test_local_work_reports_no_pull_request(capsys, repo: Path):
     session = Session(project=repo, forge="local")
-    out = run_shell("Create a landing page for demo.osf\n\ny\n/quit\n", capsys, session)
+    out = run_shell("Create a landing page for demo.osf\n\n1\n/quit\n", capsys, session)
     assert "merged (rounds=1)" in out  # no PR#, because there is no forge
     assert "PR#" not in out
 
 
 def test_local_work_never_asks_for_a_repository_name(capsys, repo: Path):
     session = Session(project=repo, forge="local")
-    out = run_shell("Create a landing page for demo.osf\n\ny\n/quit\n", capsys, session)
+    out = run_shell("Create a landing page for demo.osf\n\n1\n/quit\n", capsys, session)
     assert "Repository name" not in out  # the project you are in *is* the target
 
 
@@ -253,7 +253,7 @@ def test_the_planner_is_told_steps_share_the_project(capsys, repo: Path, monkeyp
             return ProposedPlan("Do it", [Step("Write index.html", ["index.html"])])
 
     monkeypatch.setattr(Session, "planner", lambda _self: _Spy())
-    run_shell("build something\n\ny\n/quit\n", capsys, Session(project=repo, forge="local"))
+    run_shell("build something\n\n1\n/quit\n", capsys, Session(project=repo, forge="local"))
     assert seen["shared"] is True
 
     seen.clear()
@@ -347,7 +347,7 @@ def test_the_planner_is_shown_the_project_files(capsys, repo: Path, monkeypatch)
             return ProposedPlan("Do it", [Step("Edit todo.py", ["todo.py"])])
 
     monkeypatch.setattr(Session, "planner", lambda _self: _Spy())
-    run_shell("add a flag\n\ny\n/quit\n", capsys, Session(project=repo, forge="local"))
+    run_shell("add a flag\n\n1\n/quit\n", capsys, Session(project=repo, forge="local"))
 
     assert "todo.py" in seen["propose"]  # the plan is made against the repository that exists
     assert "todo.py" in seen["route"]
@@ -375,7 +375,7 @@ def test_an_empty_project_is_described_as_empty(capsys, tmp_path: Path, monkeypa
             return ProposedPlan("Do it", [Step("Make something")])
 
     monkeypatch.setattr(Session, "planner", lambda _self: _Spy())
-    run_shell("build something\n\ny\n/quit\n", capsys, Session(project=tmp_path, forge="local"))
+    run_shell("build something\n\n1\n/quit\n", capsys, Session(project=tmp_path, forge="local"))
     assert "is empty" in seen["context"]
 
 
@@ -432,3 +432,94 @@ def test_the_driver_has_project_context_before_the_project_is_confirmed(
     monkeypatch.setattr(Session, "planner", lambda _self: _Spy())
     run_shell("change the timeout\n/quit\n", capsys, Session(forge="local"))  # project unset
     assert "settings.py" in seen["route"]
+
+
+# --- choosing what to keep ----------------------------------------------------------------------
+
+
+def _two_file_plan(monkeypatch):
+    """A plan whose step writes two files, so there is something to choose between."""
+
+    class _Planner:
+        def route(self, request, catalog="", context=""):
+            from osf.planner import Decision
+
+            return Decision(action="plan")
+
+        def clarify(self, request, context=""):
+            return []
+
+        def propose(self, request, exchanges=(), answers=(), *, shared_workspace=False, context=""):
+            from osf.planner import ProposedPlan, Step
+
+            return ProposedPlan("Do it", [Step("Write both files")])
+
+    class _Runtime:
+        def __init__(self):
+            self._workspaces = {}
+
+        async def create_session(self, workspace, role):
+            self._workspaces["s"] = workspace
+            return "s"
+
+        async def prompt(self, session, text):
+            root = Path(self._workspaces[session].path)
+            (root / "wanted.py").write_text("# the feature you asked for\n", encoding="utf-8")
+            (root / "unwanted.py").write_text("# the refactor you did not\n", encoding="utf-8")
+
+        async def stream_events(self, session):
+            return
+            yield  # pragma: no cover
+
+        async def interrupt(self, session):
+            return None
+
+        async def result(self, session):
+            from osf.runtime import AgentResult
+
+            return AgentResult(outcome="completed", transcript=[], cost_usd=0.0)
+
+    monkeypatch.setattr(Session, "planner", lambda _self: _Planner())
+    monkeypatch.setattr(Session, "runtime", lambda _self: _Runtime())
+
+
+def test_choosing_file_by_file_keeps_some_and_reverts_others(capsys, repo: Path, monkeypatch):
+    """The real case: a step delivers the feature *and* a refactor you never asked for."""
+    _two_file_plan(monkeypatch)
+    session = Session(project=repo, forge="local")
+
+    # Files are offered in git's order, which is alphabetical: unwanted.py, then wanted.py.
+    # Accept the plan, choose "file by file", revert the first, keep the second.
+    out = run_shell("build it\n\n2\n2\n1\n/quit\n", capsys, session)
+
+    assert "unwanted.py?" in out and "wanted.py?" in out  # asked about each in turn
+    assert "kept 1 file(s), reverted 1" in out
+    assert (repo / "wanted.py").is_file()
+    assert not (repo / "unwanted.py").exists()
+
+
+def test_a_file_diff_can_be_seen_before_deciding(capsys, repo: Path, monkeypatch):
+    _two_file_plan(monkeypatch)
+    session = Session(project=repo, forge="local")
+
+    # file by file; on the first file ask for the diff, then keep it; keep the second too
+    out = run_shell("build it\n\n2\n3\n1\n1\n/quit\n", capsys, session)
+
+    assert "the refactor you did not" in out  # the first file's patch was shown
+    assert "kept 2 file(s), reverted 0" in out
+    assert (repo / "wanted.py").is_file()
+
+
+def test_throwaway_workspaces_are_deleted(tmp_path: Path):
+    """`$TMPDIR/osf-*` used to accumulate one directory per work item, forever."""
+    import asyncio
+
+    from osf.local.isolation import TempdirIsolation
+    from osf.types import RepoRef
+
+    isolation = TempdirIsolation()
+    workspace = asyncio.run(isolation.prepare(RepoRef("me", "site"), "osf/x"))
+    assert Path(workspace.path).is_dir()
+
+    asyncio.run(isolation.cleanup(workspace))
+    assert not Path(workspace.path).exists()
